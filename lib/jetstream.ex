@@ -97,7 +97,7 @@ defmodule Jetstream do
     durable: true,
   ]
   def create_consumer(pid, stream_name, name, opts \\ []) do
-    {opts, _trash} = default_opts(opts, @defaults)
+    opts = Keyword.merge(@defaults, opts)
 
     {endpoint, opts} = case Keyword.pop(opts, :durable) do
       {true, opts} -> {
