@@ -148,7 +148,8 @@ defmodule Nats.Client do
   @defaults [
     host: "localhost",
     port: 4222,
-    subs: []
+    subs: [],
+    notify: [],
   ]
 
   @doc """
@@ -274,6 +275,8 @@ defmodule Nats.Client do
 
   @doc false
   def init(opts) do
+    opts = Keyword.update!(opts, :notify, &List.wrap/1)
+
     state = %{
       opts: opts,
       socket: nil,
@@ -301,11 +304,12 @@ defmodule Nats.Client do
     state = %{state |
       request_inbox: request_inbox,
       subs: subs,
-      next_sid: 1 + map_size(subs)
+      next_sid: 1 + map_size(subs),
     }
 
     case connect_with_handshake(state) do
       {:ok, socket, info} ->
+        notify(:connect, state)
         {:ok, %{state | socket: socket, info: info, max_payload: info["max_payload"]}}
 
       {:error, reason} ->
@@ -322,6 +326,7 @@ defmodule Nats.Client do
 
     case connect_with_handshake(state) do
       {:ok, socket, info} ->
+        notify(:connect, state)
         time = DateTime.diff(DateTime.utc_now(), state.closed_at)
         Logger.info("Connection (re)established to #{host}:#{port} after #{time}s")
         {:ok, %{state | socket: socket, info: info, max_payload: info["max_payload"], closed_at: nil}}
@@ -340,6 +345,9 @@ defmodule Nats.Client do
     host = state.opts[:host]
     port = state.opts[:port]
     Logger.error("Connection closed to #{host}:#{port} -- #{info}")
+
+    # Notify anyone interested.
+    notify(:disconnect, state)
 
     # Update our state.
     state = %{state | socket: nil, closed_at: DateTime.utc_now()}
@@ -503,6 +511,15 @@ defmodule Nats.Client do
       end
       {:ok, state}
     end
+  end
+
+  defp notify(what, state) do
+    msg = case what do
+      :connect -> {:nats_client_connect, self()}
+      :disconnect -> {:nats_client_disconnect, self()}
+    end
+
+    Enum.each(state.opts[:notify], &send(&1, msg))
   end
 
   defp resubscribe(socket, subs) do

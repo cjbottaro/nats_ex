@@ -22,10 +22,14 @@ defmodule Jetstream.Consumer.Fetcher do
     {:global, id(config, i)}
   end
 
+  def debug(module, i) do
+    GenServer.call(name([module: module], i), :debug)
+  end
+
   def init({config, i}) do
     Logger.info "#{inspect self()} fetcher-#{i} starting up -- #{config[:stream]} / #{config[:consumer]}"
 
-    {:ok, conn} = Keyword.put(config, :msg_handler, self())
+    {:ok, conn} = Keyword.put(config, :notify, self())
     |> Nats.Client.start_link()
 
     inbox = "_CONS." <> Nats.Utils.new_uid()
@@ -41,10 +45,16 @@ defmodule Jetstream.Consumer.Fetcher do
       inbox: inbox,
       inbox_sid: inbox_sid,
       next_msg_subject: next_msg_subject,
-      demand: 0
+      connected: false,
+      demand: 0,
+      batch: 0,
     }
 
     {:producer, state}
+  end
+
+  def handle_call(:debug, _from, state) do
+    {:reply, state, [], state}
   end
 
   def handle_call(:shutdown, _from, state) do
@@ -54,28 +64,49 @@ defmodule Jetstream.Consumer.Fetcher do
   end
 
   def handle_demand(1, state) do
-    %{demand: demand} = state
-
-    if demand == 0 do
-      %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
-      payload = %{batch: 1} |> Jason.encode!()
-      :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
-    end
-
     {:noreply, [], %{state | demand: state.demand + 1}}
   end
 
-  def handle_info(%Nats.Protocol.Msg{} = message, state) do
-    %{demand: demand} = state
-    demand = demand - 1
+  def handle_info({:nats_client_connect, _pid}, state) do
+    state = %{state | connected: true, batch: 0}
+    {:noreply, [], next_batch(state)}
+  end
 
-    if demand > 0 do
-      %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
-      payload = %{batch: 10} |> Jason.encode!()
-      :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
+  def handle_info({:nats_client_disconnect, _pid}, state) do
+    {:noreply, [], %{state | connected: false}}
+  end
+
+  def handle_info(:next_batch, state) when not state.connected do
+    {:noreply, [], state}
+  end
+
+  def handle_info(%Nats.Protocol.Msg{} = message, state) do
+    state = %{ state |
+      demand: state.demand - 1,
+      batch: state.batch - 1
+    }
+
+    {:noreply, [message], next_batch(state)}
+  end
+
+  defp next_batch(state) when not state.connected, do: state
+  defp next_batch(state) when state.batch > 0, do: state
+  defp next_batch(state) do
+    %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
+
+    # Determine batch size.
+    batch = max(state.config[:min_batch], state.demand)
+    batch = case state.config[:max_batch] do
+      nil -> batch
+      max -> min(batch, max)
     end
 
-    {:noreply, [message], %{state | demand: demand}}
+    :telemetry.execute([:nats, :jetstream, :consumer, :next_batch], %{batch_size: batch})
+
+    payload = %{batch: batch} |> Jason.encode!()
+    :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
+
+    %{state | batch: batch}
   end
 
 end

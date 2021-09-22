@@ -92,6 +92,8 @@ defmodule Jetstream.Consumer do
         concurrency: 20,
         fetch_pool: 1,
         ack_pool: 1,
+        min_batch: 1,
+        max_batch: nil,
         shutdown_grace_period: 25_000,
       ]
       def config do
