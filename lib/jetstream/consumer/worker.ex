@@ -77,7 +77,7 @@ defmodule Jetstream.Consumer.Worker do
   def handle_events([message], _from, state) do
     %{config: config, tasks: tasks, ack_wait: ack_wait, handler_state: handler_state} = state
 
-    start_time = System.monotonic_time(:millisecond)
+    start_time = System.monotonic_time(:microsecond)
     task = Task.async(config[:module], :handle_message, [message, handler_state])
     timer = Process.send_after(self(), {:ack_timeout, task.ref}, ack_wait)
 
@@ -104,6 +104,9 @@ defmodule Jetstream.Consumer.Worker do
     case Map.pop(state.tasks, ref) do
       {nil, _tasks} -> {:noreply, [], state}
       {task, tasks} ->
+        time = System.monotonic_time(:microsecond) - task.start_time
+        :telemetry.execute([:nats, :jetstream, :consumer, :task], %{time: time}, %{msg: task.message})
+
         Process.cancel_timer(task.timer)
         :ok = ack_or_nak(state, task, reason)
         :ok = ask(state, 1)
@@ -119,8 +122,8 @@ defmodule Jetstream.Consumer.Worker do
     # If the task doesn't exist or shutdown doesn't return nil, that means the
     # task has ended and will be (was) handled by :DOWN in handle_info.
     if task && Task.shutdown(task, :brutal_kill) == nil do
-      elapsed = (System.monotonic_time(:millisecond) - task.start_time) / 1000 |> round()
-      Logger.warn("Timeout while processing #{task.message.reply_to} #{elapsed}s")
+      elapsed = (System.monotonic_time(:microsecond) - task.start_time) / 1000 |> round()
+      Logger.warn("Timeout while processing #{task.message.reply_to} #{elapsed}ms")
       :ok = ask(state, 1) # Don't forget this.
     end
 
