@@ -91,6 +91,7 @@ defmodule Jetstream.Consumer do
       @defaults [
         concurrency: 20,
         fetch_pool: 1,
+        work_pool: 1,
         ack_pool: 1,
         min_batch: 1,
         max_batch: nil,
@@ -114,7 +115,7 @@ defmodule Jetstream.Consumer do
         children = [
           {Jetstream.Consumer.Creator, config},
           Enum.map(1..config[:fetch_pool], fn i -> {Jetstream.Consumer.Fetcher, {config, i}} end),
-          {Jetstream.Consumer.Worker, config},
+          Enum.map(1..config[:work_pool], fn i -> {Jetstream.Consumer.Worker, {config, i}} end),
         ]
         |> List.flatten()
 
