@@ -64,7 +64,9 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   def handle_cast(:start_asking, state) do
-    Enum.each(1..state.config[:concurrency], fn _ -> ask(state, 1) end)
+    Enum.each(1..state.config[:concurrency], fn _ ->
+      ask(state, 1)
+    end)
 
     {:noreply, [], state}
   end
