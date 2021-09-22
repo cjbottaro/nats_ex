@@ -79,7 +79,7 @@ defmodule Jetstream.Consumer do
         raise ArgumentError, "option :consumer is required"
       end
 
-      def init(config), do: config
+      def init(config), do: {:ok, config}
       defoverridable(init: 1)
 
       def handle_message(_message), do: raise RuntimeError, "implement me"
@@ -103,7 +103,6 @@ defmodule Jetstream.Consumer do
         @defaults
         |> Keyword.merge(mix_config)
         |> Keyword.merge(@opts)
-        |> init()
         |> Keyword.put(:module, __MODULE__)
       end
 

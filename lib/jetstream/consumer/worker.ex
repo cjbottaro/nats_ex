@@ -39,8 +39,11 @@ defmodule Jetstream.Consumer.Worker do
 
     ack_wait = info.payload["config"]["ack_wait"] / 1_000_000 |> trunc()
 
+    {:ok, handler_state} = config[:module].init(config)
+
     state = %{
       config: config,
+      handler_state: handler_state,
       tasks: %{},
       ack_wait: ack_wait,
       conns: conns,
@@ -72,10 +75,10 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   def handle_events([message], _from, state) do
-    %{config: config, tasks: tasks, ack_wait: ack_wait} = state
+    %{config: config, tasks: tasks, ack_wait: ack_wait, handler_state: handler_state} = state
 
     start_time = System.monotonic_time(:millisecond)
-    task = Task.async(config[:module], :handle_message, [message])
+    task = Task.async(config[:module], :handle_message, [message, handler_state])
     timer = Process.send_after(self(), {:ack_timeout, task.ref}, ack_wait)
 
     # Annotate the task some and store it.
@@ -92,8 +95,9 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   # Tasks report their return value which we can ignore.
-  def handle_info({ref, _value}, state) when is_map_key(state.tasks, ref) do
-    {:noreply, [], state}
+  def handle_info({ref, value}, state) when is_map_key(state.tasks, ref) do
+    {:ok, handler_state} = value
+    {:noreply, [], %{state | handler_state: handler_state}}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
