@@ -58,7 +58,7 @@ defmodule Jetstream.Consumer.Fetcher do
 
     if demand == 0 do
       %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
-      payload = %{batch: 10} |> Jason.encode!()
+      payload = %{batch: 1} |> Jason.encode!()
       :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
     end
 
@@ -67,6 +67,7 @@ defmodule Jetstream.Consumer.Fetcher do
 
   def handle_info(%Nats.Protocol.Msg{} = message, state) do
     %{demand: demand} = state
+    demand = demand - 1
 
     if demand > 0 do
       %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
@@ -74,7 +75,7 @@ defmodule Jetstream.Consumer.Fetcher do
       :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
     end
 
-    {:noreply, [message], %{state | demand: state.demand - 1}}
+    {:noreply, [message], %{state | demand: demand}}
   end
 
 end
