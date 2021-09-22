@@ -160,7 +160,7 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   defp ask(state, n) do
-    :ok = Enum.random(state.config[:producers])
+    :ok = Enum.random(state.producers)
     |> GenStage.ask(n)
   end
 
