@@ -3,27 +3,27 @@ defmodule Jetstream.Consumer.Fetcher do
   use GenStage
   require Logger
 
-  def child_spec(config) do
+  def child_spec({config, i}) do
     %{
-      id: id(config),
-      start: {__MODULE__, :start_link, [config]}
+      id: id(config, i),
+      start: {__MODULE__, :start_link, [config, i]}
     }
   end
 
-  def start_link(config) do
-    GenStage.start_link(__MODULE__, config, name: name(config))
+  def start_link(config, i) do
+    GenStage.start_link(__MODULE__, {config, i}, name: name(config, i))
   end
 
-  defp id(config) do
-    {__MODULE__, config[:module]}
+  defp id(config, i) do
+    {__MODULE__, {config[:module], i}}
   end
 
-  def name(config) do
-    {:global, id(config)}
+  def name(config, i) do
+    {:global, id(config, i)}
   end
 
-  def init(config) do
-    Logger.info "Fetcher stage #{inspect self()} starting up -- #{config[:stream]} / #{config[:consumer]}"
+  def init({config, i}) do
+    Logger.info "#{inspect self()} fetcher-#{i} starting up -- #{config[:stream]} / #{config[:consumer]}"
 
     {:ok, conn} = Keyword.put(config, :msg_handler, self())
     |> Nats.Client.start_link()

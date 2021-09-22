@@ -5,7 +5,6 @@ defmodule Jetstream.Consumer do
   ```
   defmodule MyConsumer do
     use Jetstream.Consumer,
-      otp_app: :my_app,
       stream: "foo",
       consumer: "bar"
 
@@ -19,7 +18,6 @@ defmodule Jetstream.Consumer do
   server. For example:
   ```
   use Jetstream.Consumer,
-      otp_app: :my_app,
       stream: "foo",
       consumer: "bar",
       max_delivery: 10,
@@ -51,7 +49,7 @@ defmodule Jetstream.Consumer do
   Runtime configuration can be done via the `c:init/1` callback.
   ```
   defmodule MyConsumer do
-    use Jetstream.Consumer, otp_app: :my_app
+    use Jetstream.Consumer
 
     def init(config) do
       Keyword.merge(config,
@@ -73,10 +71,6 @@ defmodule Jetstream.Consumer do
     quote do
       @opts unquote(opts)
 
-      if !@opts[:otp_app] do
-        raise ArgumentError, "option :otp_app is required"
-      end
-
       if !@opts[:stream] do
         raise ArgumentError, "option :stream is required"
       end
@@ -96,10 +90,13 @@ defmodule Jetstream.Consumer do
 
       @defaults [
         concurrency: 20,
+        fetch_pool: 1,
+        ack_pool: 1,
         shutdown_grace_period: 25_000,
       ]
       def config do
-        mix_config = Application.get_env(@opts[:otp_app], __MODULE__, [])
+        mix_config = Application.get_application(__MODULE__)
+        |> Application.get_env(__MODULE__, [])
 
         @defaults
         |> Keyword.merge(mix_config)
@@ -115,9 +112,10 @@ defmodule Jetstream.Consumer do
 
         children = [
           {Jetstream.Consumer.Creator, config},
-          {Jetstream.Consumer.Fetcher, config},
+          Enum.map(1..config[:fetch_pool], fn i -> {Jetstream.Consumer.Fetcher, {config, i}} end),
           {Jetstream.Consumer.Worker, config},
         ]
+        |> List.flatten()
 
         Supervisor.start_link(children, strategy: :one_for_one)
       end

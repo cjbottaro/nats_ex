@@ -24,27 +24,49 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   def init(config) do
-    Logger.info "Worker stage #{inspect self()} starting up -- #{config[:concurrency]} concurrency"
+    Logger.info "#{inspect self()} starting up -- #{config[:concurrency]} concurrency"
 
     # For shutdown grace period.
     Process.flag(:trap_exit, true)
 
-    {:ok, conn} = Nats.Client.start_link(config)
-    {:ok, info} = Jetstream.consumer_info(conn, config[:stream], config[:consumer])
+    conns = Enum.map(1..config[:ack_pool], fn _ ->
+      {:ok, conn} = Nats.Client.start_link(config)
+      conn
+    end)
+
+    {:ok, info} = Enum.random(conns)
+    |> Jetstream.consumer_info(config[:stream], config[:consumer])
+
     ack_wait = info.payload["config"]["ack_wait"] / 1_000_000 |> trunc()
 
-    state = %{ config: config, tasks: %{}, ack_wait: ack_wait, conn: conn, producer: nil }
-    producer = Jetstream.Consumer.Fetcher.name(config)
-    options = [min_demand: 0, max_demand: 1]
+    state = %{
+      config: config,
+      tasks: %{},
+      ack_wait: ack_wait,
+      conns: conns,
+      producers: []
+    }
 
-    {:consumer, state, subscribe_to: [{producer, options}]}
+    producers = Enum.map(1..config[:fetch_pool], fn i ->
+      {
+        Jetstream.Consumer.Fetcher.name(config, i),
+        [min_demand: 0, max_demand: 1]
+      }
+    end)
+
+    GenStage.cast(self(), :start_asking)
+
+    {:consumer, state, subscribe_to: producers}
   end
 
   def handle_subscribe(:producer, _opts, from, state) do
-    Enum.each(1..state.config[:concurrency], fn _ ->
-      :ok = GenStage.ask(from, 1)
-    end)
-    {:manual, %{state | producer: from}}
+    {:manual, %{state | producers: [from | state.producers]}}
+  end
+
+  def handle_cast(:start_asking, state) do
+    Enum.each(1..state.config[:concurrency], fn _ -> ask(state, 1) end)
+
+    {:noreply, [], state}
   end
 
   def handle_events([message], _from, state) do
@@ -78,7 +100,7 @@ defmodule Jetstream.Consumer.Worker do
       {task, tasks} ->
         Process.cancel_timer(task.timer)
         :ok = ack_or_nak(state, task, reason)
-        :ok = GenStage.ask(state.producer, 1)
+        :ok = ask(state, 1)
         {:noreply, [], put_in(state.tasks, tasks)}
     end
   end
@@ -93,7 +115,7 @@ defmodule Jetstream.Consumer.Worker do
     if task && Task.shutdown(task, :brutal_kill) == nil do
       elapsed = (System.monotonic_time(:millisecond) - task.start_time) / 1000 |> round()
       Logger.warn("Timeout while processing #{task.message.reply_to} #{elapsed}s")
-      :ok = GenStage.ask(state.producer, 1) # Don't forget this.
+      :ok = ask(state, 1) # Don't forget this.
     end
 
     {:noreply, [], %{state | tasks: tasks}}
@@ -103,8 +125,10 @@ defmodule Jetstream.Consumer.Worker do
     count = map_size(state.tasks)
     Logger.info "Worker stage #{inspect self()} shutting down -- #{count} tasks running"
 
-    :ok = Jetstream.Consumer.Fetcher.name(state.config)
-    |> GenStage.call(:shutdown)
+    Enum.each(1..state.config[:fetch_pool], fn i ->
+      :ok = Jetstream.Consumer.Fetcher.name(state.config, i)
+      |> GenStage.call(:shutdown)
+    end)
 
     Map.values(state.tasks)
     |> Task.yield_many(state.config[:shutdown_grace_period] - 1000)
@@ -126,11 +150,18 @@ defmodule Jetstream.Consumer.Worker do
       _error  -> {"NAK 💥", "-NAK"}
     end
 
-    conn = state.conn
+    conns = state.conns
     message = task.message
 
     Logger.info("#{log} #{message.reply_to}")
-    Nats.Client.pub(conn, message.reply_to, payload: payload)
+
+    Enum.random(conns)
+    |> Nats.Client.pub(message.reply_to, payload: payload)
+  end
+
+  defp ask(state, n) do
+    :ok = Enum.random(state.config[:producers])
+    |> GenStage.ask(n)
   end
 
 end
