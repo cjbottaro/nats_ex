@@ -14,7 +14,7 @@ defmodule Jetstream.PushConsumer do
   end
 
   def init(config) do
-    deliver_subject = "_CONS.#{Nats.Utils.new_uid}"
+    deliver_subject = "_CONS.74976e46"
 
     IO.inspect(config)
 
