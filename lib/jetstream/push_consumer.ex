@@ -1,6 +1,9 @@
 defmodule Jetstream.PushConsumer do
   use GenServer
   alias Nats.Protocol.Msg
+  require Logger
+
+  @housekeeping_interval 1_000
 
   defmodule Job do
     defstruct [:task, :start_at, :timer]
@@ -43,7 +46,20 @@ defmodule Jetstream.PushConsumer do
       jobs: %{},
     }
 
+    Process.send_after(self(), :housekeeping, @housekeeping_interval)
+
     {:ok, state}
+  end
+
+  def handle_info(:housekeeping, state) do
+    case map_size(state.jobs) do
+      0 -> nil
+      n -> Logger.info("Running jobs: #{n}")
+    end
+
+    Process.send_after(self(), :housekeeping, @housekeeping_interval)
+
+    {:noreply, state}
   end
 
   def handle_info(%Msg{} = msg, state) do
