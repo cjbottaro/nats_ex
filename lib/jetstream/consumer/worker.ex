@@ -152,7 +152,7 @@ defmodule Jetstream.Consumer.Worker do
     end)
   end
 
-  @spec ack_or_nak(map, Task.t, :normal | term) :: :ok
+  @spec ack_or_nak(map, map, :normal | term) :: :ok | {:error, term}
   defp ack_or_nak(state, task, reason) do
     {log, payload} = case reason do
       :normal -> {"ACK 🥂", "+ACK"}
