@@ -14,15 +14,15 @@ defmodule Jetstream.PushConsumer do
   end
 
   def init(config) do
-    deliver_subject = "_CONS.74976e46"
-
-    IO.inspect(config)
+    deliver_subject = config[:module]
+    |> Macro.underscore()
+    |> String.replace("/", "_")
 
     {:ok, conn} = Nats.Client.start_link(config)
-    {:ok, _sid} = Nats.Client.sub(conn, deliver_subject)
+    {:ok, _sid} = Nats.Client.sub(conn, deliver_subject, queue_group: deliver_subject)
     {:ok, %{payload: info}} = Jetstream.create_consumer(
       conn, config[:stream], config[:consumer],
-      Keyword.put(config, :deliver_subject, deliver_subject)
+      Keyword.merge(config, [deliver_subject: deliver_subject, deliver_group: deliver_subject])
     )
 
     ack_wait = case info["ack_wait"] do
@@ -54,7 +54,7 @@ defmodule Jetstream.PushConsumer do
   def handle_info(:housekeeping, state) do
     case map_size(state.jobs) do
       0 -> nil
-      n -> Logger.info("Running jobs: #{n}")
+      n -> Logger.info("Running jobs(#{state[:config][:i]}): #{n}")
     end
 
     Process.send_after(self(), :housekeeping, @housekeeping_interval)
@@ -104,10 +104,10 @@ defmodule Jetstream.PushConsumer do
     quote location: :keep do
       @config unquote(config)
 
-      def child_spec(config) do
+      def child_spec(i) do
         %{
-          id: config[:module],
-          start: {__MODULE__, :start_link, [config]}
+          id: {Jetstream.Consumer, {__MODULE__, i}},
+          start: {__MODULE__, :start_link, [[i: i]]}
         }
       end
 
