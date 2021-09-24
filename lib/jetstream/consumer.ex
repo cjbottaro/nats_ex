@@ -68,27 +68,21 @@ defmodule Jetstream.Consumer do
   @callback init(config :: Keyword.t) :: Keyword.t
 
   defmacro __using__(opts \\ []) do
-    quote do
+    quote location: :keep do
       @opts unquote(opts)
 
       if !@opts[:stream] do
         raise ArgumentError, "option :stream is required"
       end
 
-      if !@opts[:consumer] do
-        raise ArgumentError, "option :consumer is required"
-      end
-
       def init(config), do: {:ok, config}
       defoverridable(init: 1)
-
-      def handle_message(_message), do: raise RuntimeError, "implement me"
-      defoverridable(handle_message: 1)
 
       def handle_error(error), do: nil
       defoverridable(handle_error: 1)
 
       @defaults [
+        ack_wait: {30, :second},
         concurrency: 20,
         fetch_pool: 1,
         work_pool: 1,
@@ -107,8 +101,16 @@ defmodule Jetstream.Consumer do
         |> Keyword.put(:module, __MODULE__)
       end
 
+      def child_spec(config) do
+        %{
+          id: __MODULE__,
+          start: {__MODULE__, :start_link, [config]}
+        }
+      end
+
       def start_link(opts \\ []) do
         config = Keyword.merge(config(), opts)
+        |> Keyword.put_new(:consumer, Macro.underscore(__MODULE__))
 
         Jetstream.Consumer.sanity_checks!(config)
 
