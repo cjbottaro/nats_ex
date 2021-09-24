@@ -58,6 +58,7 @@ defmodule Jetstream.Consumer.Worker do
     end)
 
     GenStage.cast(self(), :start_asking)
+    Process.send_after(self(), :report, 1_000)
 
     {:consumer, state, subscribe_to: producers}
   end
@@ -130,6 +131,15 @@ defmodule Jetstream.Consumer.Worker do
     {:noreply, [], %{state | tasks: tasks}}
   end
 
+  def handle_info(:report, state) do
+    case map_size(state.tasks) do
+      0 -> nil
+      n -> Logger.info("Pending tasks: #{n}")
+    end
+
+    {:noreply, state}
+  end
+
   def terminate(_reason, state) do
     count = map_size(state.tasks)
     Logger.info "Worker stage #{inspect self()} shutting down -- #{count} tasks running"
@@ -162,7 +172,7 @@ defmodule Jetstream.Consumer.Worker do
     conns = state.conns
     message = task.message
 
-    Logger.info("#{log} #{message.reply_to}")
+    Logger.debug("#{log} #{message.reply_to}")
 
     Enum.random(conns)
     |> Nats.Client.pub(message.reply_to, payload: payload)

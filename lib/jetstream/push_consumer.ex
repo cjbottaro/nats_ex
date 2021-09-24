@@ -18,6 +18,16 @@ defmodule Jetstream.PushConsumer do
     |> Macro.underscore()
     |> String.replace("/", "_")
 
+    deliver_group = case config[:deliver_group] do
+      nil -> nil
+      true -> deliver_subject
+
+
+      s when is_binary(s) -> s
+    end
+
+
+
     {:ok, conn} = Nats.Client.start_link(config)
     {:ok, _sid} = Nats.Client.sub(conn, deliver_subject, queue_group: deliver_subject)
     {:ok, %{payload: info}} = Jetstream.create_consumer(
@@ -128,7 +138,7 @@ defmodule Jetstream.PushConsumer do
   when flow_control != nil and map_size(jobs) == 0 do
     %{nats: nats, flow_control: flow_control} = state
 
-    Logger.info("Flow control(#{state[:config][:i]}): #{flow_control}")
+    Logger.debug("Flow control: #{flow_control}")
     Nats.Client.pub(nats, flow_control)
 
     {:noreply, %{state | flow_control: nil}}
