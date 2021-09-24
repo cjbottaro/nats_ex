@@ -148,6 +148,7 @@ defmodule Nats.Client do
   @defaults [
     host: "localhost",
     port: 4222,
+    headers: true,
     subs: [],
     notify: [],
   ]
@@ -578,7 +579,7 @@ defmodule Nats.Client do
     with {:ok, socket} <- :gen_tcp.connect(host, port, opts),
       {:ok, line} <- :gen_tcp.recv(socket, 0),
       Logger.debug("<<- #{inspect line}"),
-      connect = Protocol.Connect.new(lang: "elixir", verbose: false),
+      connect = Protocol.Connect.new(lang: "elixir", verbose: false, headers: state.opts[:headers]),
       :ok <- send_message(connect, socket),
       :ok <- resubscribe(socket, state.subs),
       :ok <- :inet.setopts(socket, active: :once)

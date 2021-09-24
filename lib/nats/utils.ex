@@ -16,6 +16,17 @@ defmodule Nats.Utils do
     |> Base.encode16(case: :lower)
   end
 
+  def to_nanosecond(value, unit \\ :millisecond) do
+    case unit do
+      :second      -> value * 1_000_000_000
+      :millisecond -> value * 1_000_000
+      :microsecond -> value * 1_000
+
+      :minute -> to_nanosecond(value*60, :second)
+      :hour -> to_nanosecond(value*60, :minute)
+    end
+  end
+
   def format_usec(usec) do
     cond do
       usec < 1_000 ->

@@ -41,6 +41,7 @@ defmodule Jetstream.PushConsumer do
       module: config[:module],
       handler_state: handler_state,
       deliver_subject: deliver_subject,
+      flow_control: nil,
       info: info,
       ack_wait: ack_wait,
       jobs: %{},
@@ -62,6 +63,29 @@ defmodule Jetstream.PushConsumer do
     {:noreply, state}
   end
 
+  def handle_info(%Msg{payload: nil, headers: headers} = msg, state) do
+    cond do
+      "NATS/1.0 100 FlowControl Request" in headers ->
+        {:noreply, %{state | flow_control: msg.reply_to}, {:continue, :flow_control}}
+
+      "NATS/1.0 100 Idle Heartbeat" in headers ->
+        flow_control = Enum.find_value(headers, fn header ->
+          case String.split(header, ":") do
+            ["Nats-Consumer-Stalled", subject] -> String.trim(subject)
+            _ -> false
+          end
+        end)
+        if flow_control do
+          {:noreply, %{state | flow_control: flow_control}, {:continue, :flow_control}}
+        else
+          {:noreply, state}
+        end
+
+      true ->
+        Logger.error "Unexpected msg: #{inspect msg}"
+    end
+  end
+
   def handle_info(%Msg{} = msg, state) do
     %{module: module, ack_wait: ack_wait, jobs: jobs, handler_state: handler_state} = state
 
@@ -77,7 +101,7 @@ defmodule Jetstream.PushConsumer do
     job = %Job{start_at: start_at, task: task, timer: timer}
     jobs = Map.put(jobs, task.ref, job)
 
-    {:noreply, %{state | jobs: jobs}}
+    {:noreply, %{state | jobs: jobs}, {:continue, :flow_control}}
   end
 
   # Tasks report their return value which we can ignore.
@@ -97,6 +121,20 @@ defmodule Jetstream.PushConsumer do
   # Task.async both links and monitors, so we can ignore the :EXIT messages from
   # the link because we're already handling the :DOWN messages from the monitor.
   def handle_info({:EXIT, _pid, _reason}, state) do
+    {:noreply, state}
+  end
+
+  def handle_continue(:flow_control, %{flow_control: flow_control, jobs: jobs} = state)
+  when flow_control != nil and map_size(jobs) == 0 do
+    %{nats: nats, flow_control: flow_control} = state
+
+    Logger.info("Flow control(#{state[:config][:i]}): #{flow_control}")
+    Nats.Client.pub(nats, flow_control)
+
+    {:noreply, %{state | flow_control: nil}}
+  end
+
+  def handle_continue(:flow_control, state) do
     {:noreply, state}
   end
 
