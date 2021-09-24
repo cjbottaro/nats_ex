@@ -137,7 +137,9 @@ defmodule Jetstream.Consumer.Worker do
       n -> Logger.info("Pending tasks: #{n}")
     end
 
-    {:noreply, state}
+    Process.send_after(self(), :report, 1_000)
+
+    {:noreply, [], state}
   end
 
   def terminate(_reason, state) do
