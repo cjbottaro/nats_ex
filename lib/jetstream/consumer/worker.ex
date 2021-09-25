@@ -3,6 +3,8 @@ defmodule Jetstream.Consumer.Worker do
   use GenStage
   require Logger
 
+  @report_interval 1_000
+
   def child_spec({config, i}) do
     %{
       id: id(config, i),
@@ -58,7 +60,7 @@ defmodule Jetstream.Consumer.Worker do
     end)
 
     GenStage.cast(self(), :start_asking)
-    Process.send_after(self(), :report, 1_000)
+    Process.send_after(self(), :report, @report_interval)
 
     {:consumer, state, subscribe_to: producers}
   end
@@ -132,12 +134,14 @@ defmodule Jetstream.Consumer.Worker do
   end
 
   def handle_info(:report, state) do
-    case map_size(state.tasks) do
-      0 -> nil
-      n -> Logger.info("Pending tasks: #{n}")
-    end
+    %{tasks: tasks} = state
 
-    Process.send_after(self(), :report, 1_000)
+    :telemetry.execute(
+      [:nats, :jetstream, :consumer, :worker, :report],
+      %{running: map_size(tasks)}
+    )
+
+    Process.send_after(self(), :report, @report_interval)
 
     {:noreply, [], state}
   end
