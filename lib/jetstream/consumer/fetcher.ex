@@ -50,6 +50,8 @@ defmodule Jetstream.Consumer.Fetcher do
       batch: 0,
     }
 
+    Process.send_after(self(), :report, 1_000)
+
     {:producer, state}
   end
 
@@ -84,6 +86,17 @@ defmodule Jetstream.Consumer.Fetcher do
     }
 
     {:noreply, [message], next_batch(state)}
+  end
+
+  def handle_info(:report, state) do
+    %{demand: demand, batch: batch} = state
+
+    Logger.info("Fetcher demand: #{demand}")
+    Logger.info("Fetcher  batch: #{batch}")
+
+    Process.send_after(self(), :report, 1_000)
+
+    {:noreply, [], state}
   end
 
   defp next_batch(state) when not state.connected, do: state
