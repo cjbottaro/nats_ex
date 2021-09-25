@@ -112,6 +112,7 @@ defmodule Jetstream.Consumer.Fetcher do
     end
 
     :telemetry.execute([:nats, :jetstream, :consumer, :next_batch], %{batch_size: batch})
+    Logger.info("Fetcher next_batch: #{batch}")
 
     payload = %{batch: batch} |> Jason.encode!()
     :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
