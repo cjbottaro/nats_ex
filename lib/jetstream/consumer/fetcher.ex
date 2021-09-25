@@ -101,6 +101,7 @@ defmodule Jetstream.Consumer.Fetcher do
 
   defp next_batch(state) when not state.connected, do: state
   defp next_batch(state) when state.batch > 0, do: state
+  defp next_batch(state) when state.demand < 1, do: state
   defp next_batch(state) do
     %{conn: conn, next_msg_subject: next_msg_subject, inbox: inbox} = state
 
@@ -112,7 +113,6 @@ defmodule Jetstream.Consumer.Fetcher do
     end
 
     :telemetry.execute([:nats, :jetstream, :consumer, :next_batch], %{batch_size: batch})
-    Logger.info("Fetcher next_batch: #{batch}")
 
     payload = %{batch: batch} |> Jason.encode!()
     :ok = Nats.Client.pub(conn, next_msg_subject, reply_to: inbox, payload: payload)
