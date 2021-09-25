@@ -3,6 +3,8 @@ defmodule Jetstream.Consumer.Worker do
   use GenStage
   require Logger
 
+  @report_interval 1_000
+
   def child_spec({config, i}) do
     %{
       id: id(config, i),
@@ -58,6 +60,7 @@ defmodule Jetstream.Consumer.Worker do
     end)
 
     GenStage.cast(self(), :start_asking)
+    Process.send_after(self(), :report, @report_interval)
 
     {:consumer, state, subscribe_to: producers}
   end
@@ -130,6 +133,19 @@ defmodule Jetstream.Consumer.Worker do
     {:noreply, [], %{state | tasks: tasks}}
   end
 
+  def handle_info(:report, state) do
+    %{tasks: tasks} = state
+
+    :telemetry.execute(
+      [:nats, :jetstream, :consumer, :worker, :report],
+      %{running: map_size(tasks)}
+    )
+
+    Process.send_after(self(), :report, @report_interval)
+
+    {:noreply, [], state}
+  end
+
   def terminate(_reason, state) do
     count = map_size(state.tasks)
     Logger.info "Worker stage #{inspect self()} shutting down -- #{count} tasks running"
@@ -152,7 +168,7 @@ defmodule Jetstream.Consumer.Worker do
     end)
   end
 
-  @spec ack_or_nak(map, Task.t, :normal | term) :: :ok
+  @spec ack_or_nak(map, map, :normal | term) :: :ok | {:error, term}
   defp ack_or_nak(state, task, reason) do
     {log, payload} = case reason do
       :normal -> {"ACK 🥂", "+ACK"}
@@ -162,7 +178,7 @@ defmodule Jetstream.Consumer.Worker do
     conns = state.conns
     message = task.message
 
-    Logger.info("#{log} #{message.reply_to}")
+    Logger.debug("#{log} #{message.reply_to}")
 
     Enum.random(conns)
     |> Nats.Client.pub(message.reply_to, payload: payload)

@@ -18,7 +18,11 @@ defmodule Nats.Protocol do
   end
 
   def recv(socket, "MSG", payload) do
-    Protocol.Msg.recv(socket, payload)
+    Protocol.Msg.recv(socket, payload, false)
+  end
+
+  def recv(socket, "HMSG", payload) do
+    Protocol.Msg.recv(socket, payload, true)
   end
 
 end
