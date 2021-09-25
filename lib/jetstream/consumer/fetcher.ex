@@ -64,7 +64,8 @@ defmodule Jetstream.Consumer.Fetcher do
   end
 
   def handle_demand(1, state) do
-    {:noreply, [], %{state | demand: state.demand + 1}}
+    state = %{state | demand: state.demand + 1}
+    {:noreply, [], next_batch(state)}
   end
 
   def handle_info({:nats_client_connect, _pid}, state) do
@@ -74,10 +75,6 @@ defmodule Jetstream.Consumer.Fetcher do
 
   def handle_info({:nats_client_disconnect, _pid}, state) do
     {:noreply, [], %{state | connected: false}}
-  end
-
-  def handle_info(:next_batch, state) when not state.connected do
-    {:noreply, [], state}
   end
 
   def handle_info(%Nats.Protocol.Msg{} = message, state) do
