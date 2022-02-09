@@ -58,7 +58,8 @@ defmodule Nats.Client do
   :ok = pub(conn, "foo.bar", payload: "echo", reply_to: "some.subject")
   ```
   """
-  @spec pub(t, binary, Keyword.t) :: :ok | {:error, binary}
+  @spec pub(t, binary) :: :ok | {:error, term}
+  @spec pub(t, binary, Keyword.t) :: :ok | {:error, term}
   def pub(conn, subject, opts \\ []) do
     pub = Protocol.Pub.new(subject, opts)
     Connection.call(conn, {:pub, pub})
@@ -85,13 +86,14 @@ defmodule Nats.Client do
   @spec request(t, binary, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, :timeout} | {:error, binary}
   def request(conn, subject, opts \\ []) do
     {timeout, opts} = Keyword.pop(opts, :timeout, 5000)
+    {version, opts} = Keyword.pop(opts, :v, 2)
 
     if not is_integer(timeout) or timeout <= 0 do
       raise ArgumentError, ":timeout must be a positive integer in milliseconds"
     end
 
     pub = Protocol.Pub.new(subject, opts)
-    Connection.call(conn, {:request, pub, timeout}, :infinity)
+    Connection.call(conn, {:request, pub, timeout, version}, :infinity)
   end
 
   @doc """
@@ -285,13 +287,14 @@ defmodule Nats.Client do
       next_sid: nil,
       subs: %{},
       request_inbox: nil,
-      requests: %{},
+      requests_v1: %{},
+      requests_v2: %{},
       info: nil,
       max_payload: nil,
     }
 
     # Setup our request inbox.
-    request_inbox = "_INBOX." <> new_uid()
+    request_inbox = "_INBOX.V2." <> new_uid()
 
     # Setup any configured subs (plus our request inbox).
     subs = ["#{request_inbox}.*" | opts[:subs]]
@@ -369,21 +372,42 @@ defmodule Nats.Client do
     {:reply, send_message(message, state), state}
   end
 
-  def handle_call({:request, pub, _timeout}, _from, state) when pub.bytes > state.max_payload do
+  def handle_call({:request, pub, _timeout, _style}, _from, state) when pub.bytes > state.max_payload do
     {:reply, {:error, "Maximum Payload Violation"}, state}
   end
 
-  def handle_call({:request, pub, timeout}, from, state) do
-    %{request_inbox: request_inbox, requests: requests} = state
+  def handle_call({:request, pub, timeout, 1}, from, state) do
+    %{requests_v1: requests} = state
+
+    sub = Protocol.Sub.new("_INBOX.V1." <> new_uid(), nil)
+    {sub, state} = set_sid(sub, state)
+    unsub = Protocol.Unsub.new(sub.sid, 1)
+    pub = %{pub | reply_to: sub.subject}
+
+    with :ok <- send_message(sub, state),
+      :ok <- send_message(unsub, state),
+      :ok <- send_message(pub, state)
+    do
+      timer = Process.send_after(self(), {:cancel_request_v1, sub.sid}, timeout)
+      requests = Map.put(requests, sub.sid, {from, timer})
+      state = %{state | requests_v1: requests}
+      {:noreply, state}
+    else
+      error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:request, pub, timeout, 2}, from, state) do
+    %{request_inbox: request_inbox, requests_v2: requests} = state
 
     reply_to = "#{request_inbox}.#{new_uid()}"
     pub = %{pub | reply_to: reply_to}
 
     case send_message(pub, state) do
       :ok ->
-        timer = Process.send_after(self(), {:cancel_request, reply_to}, timeout)
+        timer = Process.send_after(self(), {:cancel_request_v2, reply_to}, timeout)
         requests = Map.put(requests, reply_to, {from, timer})
-        state = %{state | requests: requests}
+        state = %{state | requests_v2: requests}
         {:noreply, state}
 
       error -> {:reply, error, state}
@@ -467,17 +491,33 @@ defmodule Nats.Client do
     {:noreply, state}
   end
 
-  def handle_info({:cancel_request, request_key}, state) do
-    %{requests: requests} = state
+  def handle_info({:cancel_request_v1, sid}, state) do
+    %{requests_v1: requests} = state
 
-    {request, requests} = Map.pop(requests, request_key)
+    {request, requests} = Map.pop(requests, sid)
 
     if request do
       {from, _timer} = request
       Connection.reply(from, {:error, :timeout})
     end
 
-    {:noreply, %{state | requests: requests}}
+    Protocol.Unsub.new(sid, nil)
+    |> send_message(state)
+
+    {:noreply, %{state | requests_v1: requests}}
+  end
+
+  def handle_info({:cancel_request_v2, subject}, state) do
+    %{requests_v2: requests} = state
+
+    {request, requests} = Map.pop(requests, subject)
+
+    if request do
+      {from, _timer} = request
+      Connection.reply(from, {:error, :timeout})
+    end
+
+    {:noreply, %{state | requests_v2: requests}}
   end
 
   def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
@@ -502,16 +542,25 @@ defmodule Nats.Client do
   end
 
   def handle_message(%Protocol.Msg{} = msg, state) do
-    if String.starts_with?(msg.subject, state.request_inbox) do
-      reply_to_request(msg, state)
-    else
-      case state.subs[msg.sid] do
-        %{receiver: {pid, _ref}} -> send(pid, msg)
-        %{receiver: pid} when is_pid(pid) -> send(pid, msg)
-        nil -> Logger.warn("Unexpected #{inspect msg}")
-      end
-      {:ok, state}
+    %{requests_v1: requests_v1} = state
+
+    cond do
+
+      Map.has_key?(requests_v1, msg.sid) ->
+        reply_to_request_v1(msg, state)
+
+      String.starts_with?(msg.subject, state.request_inbox) ->
+        reply_to_request_v2(msg, state)
+
+      true ->
+        case state.subs[msg.sid] do
+          %{receiver: {pid, _ref}} -> send(pid, msg)
+          %{receiver: pid} when is_pid(pid) -> send(pid, msg)
+          nil -> Logger.warn("Unexpected #{inspect msg}")
+        end
+        {:ok, state}
     end
+
   end
 
   defp notify(what, state) do
@@ -531,8 +580,28 @@ defmodule Nats.Client do
     :ok
   end
 
-  defp reply_to_request(msg, state) do
-    %{requests: requests} = state
+  defp reply_to_request_v1(msg, state) do
+    %{requests_v1: requests} = state
+
+    case Map.pop(requests, msg.sid) do
+
+      {nil, _requests} ->
+        Logger.warn("Discarding request response due to timeout: #{inspect msg}")
+        {:ok, state}
+
+      {request, requests} ->
+        {from, timer} = request
+        case Process.cancel_timer(timer) do
+          false -> Logger.warn("Discarding request response due to timeout: #{inspect msg}")
+          _time_left -> :ok = Connection.reply(from, {:ok, msg})
+        end
+        {:ok, %{state | requests_v1: requests}}
+
+    end
+  end
+
+  defp reply_to_request_v2(msg, state) do
+    %{requests_v2: requests} = state
 
     case Map.pop(requests, msg.subject) do
 
@@ -546,7 +615,7 @@ defmodule Nats.Client do
           false -> Logger.warn("Discarding request response due to timeout: #{inspect msg}")
           _time_left -> :ok = Connection.reply(from, {:ok, msg})
         end
-        {:ok, %{state | requests: requests}}
+        {:ok, %{state | requests_v2: requests}}
 
     end
   end
