@@ -372,7 +372,7 @@ defmodule Nats.Client do
     {:reply, send_message(message, state), state}
   end
 
-  def handle_call({:request, pub, _timeout, _style}, _from, state) when pub.bytes > state.max_payload do
+  def handle_call({:request, pub, _timeout, _version}, _from, state) when pub.bytes > state.max_payload do
     {:reply, {:error, "Maximum Payload Violation"}, state}
   end
 
@@ -542,14 +542,14 @@ defmodule Nats.Client do
   end
 
   def handle_message(%Protocol.Msg{} = msg, state) do
-    %{requests_v1: requests_v1} = state
+    %{requests_v1: requests_v1, request_inbox: request_inbox} = state
 
     cond do
 
       Map.has_key?(requests_v1, msg.sid) ->
         reply_to_request_v1(msg, state)
 
-      String.starts_with?(msg.subject, state.request_inbox) ->
+      String.starts_with?(msg.subject, request_inbox) ->
         reply_to_request_v2(msg, state)
 
       true ->
@@ -559,6 +559,7 @@ defmodule Nats.Client do
           nil -> Logger.warn("Unexpected #{inspect msg}")
         end
         {:ok, state}
+
     end
 
   end
