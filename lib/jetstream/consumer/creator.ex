@@ -14,7 +14,7 @@ defmodule Jetstream.Consumer.Creator do
 
     {:ok, conn} = Nats.Client.start_link(config)
     with {:ok, %{payload: %{"error" => %{"code" => 404}}}} <- get_consumer(conn, config) do
-      {:ok, %{payload: %{"created" => _}}} = Jetstream.create_consumer(conn, config[:stream], config[:consumer], config)
+      {:ok, %{payload: %{"created" => _}}} = Jetstream.consumer_create(conn, config[:stream], config[:consumer], config)
     end
     :ok = GenServer.stop(conn)
   end

@@ -12,7 +12,7 @@ defmodule Nats.Client do
   ```
   """
 
-  @type t :: pid
+  @type t :: GenServer.server
   @type sid :: binary
 
   use Connection

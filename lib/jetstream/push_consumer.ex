@@ -30,7 +30,7 @@ defmodule Jetstream.PushConsumer do
 
     {:ok, conn} = Nats.Client.start_link(config)
     {:ok, _sid} = Nats.Client.sub(conn, deliver_subject, queue_group: deliver_subject)
-    {:ok, %{payload: info}} = Jetstream.create_consumer(
+    {:ok, %{payload: info}} = Jetstream.consumer_create(
       conn, config[:stream], config[:consumer],
       Keyword.merge(config, [deliver_subject: deliver_subject, deliver_group: deliver_subject])
     )

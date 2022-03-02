@@ -14,7 +14,7 @@ defmodule Jetstream.Consumer do
   ```
 
   Additional options passed to `use Jetstream.Consumer` will be passed to
-  `Jetstream.create_consumer/4` when the consumer is created on the Jetstream
+  `Jetstream.consumer_create/4` when the consumer is created on the Jetstream
   server. For example:
   ```
   use Jetstream.Consumer,
