@@ -79,13 +79,14 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  @defaults [async: false]
   def publish(pid, subject, payload, opts \\ []) do
-    opts = Keyword.merge(@defaults, opts)
-    if opts[:async] do
-      Nats.Client.pub(pid, subject, payload: payload)
+    {async, opts} = Keyword.pop(opts, :async, false)
+    opts = Keyword.put(opts, :payload, payload)
+
+    if async do
+      Nats.Client.pub(pid, subject, opts)
     else
-      case Nats.Client.request(pid, subject, payload: payload) do
+      case Nats.Client.request(pid, subject, opts) do
         {:ok, %{bytes: 0}} -> :ok
         {:ok, %{payload: json}} -> case Jason.decode(json) do
           {:ok, %{"error" => %{"description" => reason}}} -> {:error, reason}
