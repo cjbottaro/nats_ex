@@ -73,8 +73,9 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def stream_msg_delete(pid, name, seq) do
-    payload = %{seq: seq}
+  def stream_msg_delete(pid, name, seq, opts \\ []) do
+    no_erase = Keyword.get(opts, :no_erase, false)
+    payload = %{seq: seq, no_erase: no_erase}
     Nats.Client.request(pid, "$JS.API.STREAM.MSG.DELETE.#{name}", payload: payload)
     |> decode_response()
   end
