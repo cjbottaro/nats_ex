@@ -254,9 +254,9 @@ defmodule Nats.Rpc.Server do
     end)
     |> Enum.uniq()
 
-    subs = subjects
-    |> Enum.map(fn subject ->
-      {subject, Macro.underscore(config[:module])}
+    queue_group = Macro.underscore(config[:module])
+    subs = Enum.map(subjects, fn subject ->
+      Nats.Sub.new(subject, queue_group: queue_group)
     end)
 
     name = inspect(config[:module])

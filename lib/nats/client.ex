@@ -297,12 +297,9 @@ defmodule Nats.Client do
     request_inbox = "_INBOX.V2." <> new_uid()
 
     # Setup any configured subs (plus our request inbox).
-    subs = ["#{request_inbox}.*" | opts[:subs]]
+    subs = [Nats.Sub.new("#{request_inbox}.*") | opts[:subs]]
     |> Enum.with_index(1)
-    |> Enum.map(fn
-      {{subject, queue_group}, sid} -> Protocol.Sub.new(subject, sid, queue_group)
-      {subject, sid} -> Protocol.Sub.new(subject, sid)
-    end)
+    |> Enum.map(fn {%Nats.Sub{} = sub, sid} -> Protocol.Sub.new(sub, sid) end)
     |> Map.new(fn sub -> {sub.sid, sub} end)
 
     state = %{state |
