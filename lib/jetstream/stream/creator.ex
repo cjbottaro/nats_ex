@@ -10,10 +10,10 @@ defmodule Jetstream.Stream.Creator do
     conn = config[:module]
     case get_stream(conn, config) do
       {:ok, %{payload: %{"error" => %{"code" => 404}}}} ->
-        {:ok, %{payload: %{"created" => _}}} = Jetstream.create_stream(conn, config[:name], config)
+        {:ok, %{payload: %{"created" => _}}} = Jetstream.stream_update(conn, config[:name], config)
       {:ok, %{payload: %{"created" => _}}} ->
         {:ok, %{payload: %{"type" => "io.nats.jetstream.api.v1.stream_update_response"}}} =
-          Jetstream.update_stream(conn, config[:name], config)
+          Jetstream.stream_update(conn, config[:name], config)
     end
   end
 

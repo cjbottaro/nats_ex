@@ -4,6 +4,8 @@ defmodule Jetstream do
   """
   import Nats.Utils
 
+  @type reason :: binary | atom
+
   @defaults [
     subjects: [],
     max_age: 0,
@@ -27,12 +29,12 @@ defmodule Jetstream do
   ```
   ## Examples
   ```
-  {:ok, _msg} = create_stream(conn, "foo")
-  {:ok, _msg} = create_stream(conn, "foo", subjects: ["foo.*"])
+  {:ok, _msg} = stream_create(conn, "foo")
+  {:ok, _msg} = stream_create(conn, "foo", subjects: ["foo.*"])
   ```
   """
-  @spec create_stream(Nats.Client.t, binary, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, binary}
-  def create_stream(pid, name, opts \\ []) do
+  @spec stream_create(Nats.Client.t, binary, Keyword.t) :: {:ok, map} | {:error, term}
+  def stream_create(pid, name, opts \\ []) do
     {opts, _trash} = default_opts(opts, @defaults)
 
     payload = Keyword.put(opts, :name, name) |> Map.new()
@@ -41,7 +43,7 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def update_stream(pid, name, config \\ []) do
+  def stream_update(pid, name, config \\ []) do
     with {:ok, %{payload: %{"config" => old_config}}} <- stream_info(pid, name) do
       new_config = Map.new(config, fn {k, v} -> {to_string(k), v} end)
       config = Map.merge(old_config, new_config)
@@ -50,7 +52,7 @@ defmodule Jetstream do
     end
   end
 
-  def list_streams(pid) do
+  def stream_list(pid) do
     Nats.Client.request(pid, "$JS.API.STREAM.NAMES")
     |> decode_response()
   end
@@ -60,28 +62,36 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def delete_stream(pid, name) do
+  def stream_delete(pid, name) do
     Nats.Client.request(pid, "$JS.API.STREAM.DELETE.#{name}")
     |> decode_response()
   end
 
-  def get_message(pid, name, seq) do
+  def stream_msg_get(pid, name, seq) do
     payload = %{seq: seq}
     Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: payload)
     |> decode_response()
   end
 
-  @defaults [async: false]
+  def stream_msg_delete(pid, name, seq, opts \\ []) do
+    no_erase = Keyword.get(opts, :no_erase, false)
+    payload = %{seq: seq, no_erase: no_erase}
+    Nats.Client.request(pid, "$JS.API.STREAM.MSG.DELETE.#{name}", payload: payload)
+    |> decode_response()
+  end
+
   def publish(pid, subject, payload, opts \\ []) do
-    opts = Keyword.merge(@defaults, opts)
-    if opts[:async] do
-      Nats.Client.pub(pid, subject, payload: payload)
+    {async, opts} = Keyword.pop(opts, :async, false)
+    opts = Keyword.put(opts, :payload, payload)
+
+    if async do
+      Nats.Client.pub(pid, subject, opts)
     else
-      case Nats.Client.request(pid, subject, payload: payload) do
+      case Nats.Client.request(pid, subject, opts) do
         {:ok, %{bytes: 0}} -> :ok
         {:ok, %{payload: json}} -> case Jason.decode(json) do
           {:ok, %{"error" => %{"description" => reason}}} -> {:error, reason}
-          {:ok, _payload} -> :ok
+          {:ok, payload} -> {:ok, payload}
           {:error, reason} -> {:error, reason}
         end
         error -> error
@@ -96,7 +106,7 @@ defmodule Jetstream do
     replay_policy: :instant,
     durable: true,
   ]
-  def create_consumer(pid, stream_name, name, opts \\ []) do
+  def consumer_create(pid, stream_name, name, opts \\ []) do
     opts = Keyword.merge(@defaults, opts)
 
     {endpoint, opts} = case Keyword.pop(opts, :durable) do
@@ -117,7 +127,7 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def delete_consumer(pid, stream_name, name) do
+  def consumer_delete(pid, stream_name, name) do
     Nats.Client.request(pid, "$JS.API.CONSUMER.DELETE.#{stream_name}.#{name}")
     |> decode_response()
   end
@@ -127,9 +137,39 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def list_consumers(pid, stream_name) do
+  def consumer_list(pid, stream_name) do
     Nats.Client.request(pid, "$JS.API.CONSUMER.LIST.#{stream_name}")
     |> decode_response()
+  end
+
+  @defaults [batch: 1, no_wait: false, expires: 5000]
+  def consumer_msg_next(pid, stream_name, consumer_name, opts \\ []) do
+    {expires, opts} = Keyword.merge(@defaults, opts)
+    |> Keyword.get_and_update!(:expires, &{&1, &1 * 1_000_000})
+
+    payload = Map.new(opts) |> Jason.encode!()
+    subject = "$JS.API.CONSUMER.MSG.NEXT.#{stream_name}.#{consumer_name}"
+
+    Nats.Client.request(pid, subject, payload: payload, timeout: expires + 200, v: 1)
+  end
+
+  @spec consumer_msg_ack(Nats.Client.t, Nats.Protocol.Msg.t | binary, atom, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, reason}
+  def consumer_msg_ack(client, msg_or_subject, type, opts \\ [])
+
+  def consumer_msg_ack(pid, msg, type, opts) when is_struct(msg) do
+    consumer_msg_ack(pid, msg.reply_to, type, opts)
+  end
+
+  def consumer_msg_ack(pid, subject, type, opts) when is_binary(subject) do
+    payload = case type do
+      :ack -> "+ACK"
+      :nak -> case opts[:delay] do
+        nil -> "-NAK"
+        delay -> "-NAK " <> Jason.encode!(%{delay: delay * 1_000_000})
+      end
+      :term -> "+TERM"
+    end
+    Nats.Client.request(pid, subject, Keyword.put(opts, :payload, payload))
   end
 
   defp decode_response(resp) do
