@@ -13,7 +13,13 @@ defmodule Nats.Protocol.Sub do
   @doc """
   Convenience to construct a `t:#{inspect __MODULE__}.t/0`.
   """
-  @spec new(atom | binary, atom | binary | integer, atom | binary | nil) :: t()
+
+  @spec new(Nats.Sub.t | atom | binary, atom | binary | integer, atom | binary | nil) :: t()
+
+  def new(%Nats.Sub{} = sub, sid) do
+    %{ new(sub.subject, sid, sub.queue_group) | receiver: sub.receiver }
+  end
+
   def new(subject, sid, queue_group \\ nil) do
 
     # Normalize subject.
