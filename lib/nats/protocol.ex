@@ -5,7 +5,7 @@ defmodule Nats.Protocol do
 
   defdelegate pong(), to: Protocol.Pong, as: :new
   defdelegate connect(opts \\ []), to: Protocol.Connect, as: :new
-  defdelegate sub(subject, opts \\ []), to: Protocol.Sub, as: :new
+  defdelegate sub(subject, sid), to: Protocol.Sub, as: :new
   defdelegate pub(subject, opts \\ []), to: Protocol.Pub, as: :new
   defdelegate unsub(sid, count \\ nil), to: Protocol.Unsub, as: :new
 
