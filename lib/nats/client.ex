@@ -147,61 +147,12 @@ defmodule Nats.Client do
     Connection.call(conn, :subs)
   end
 
-  @doc """
-  Register a process to receive connection notifications.
-
-  Nats allows connection multiplexing, so it's common for a connection to be
-  shared among many processes. The problem is that a connection is stateful.
-
-  Consider a Jetstream batched pull request  with and expires of 10 seconds. If
-  the Nats connection disconnects and reconnects before you receieve the
-  expiration message, your process will hang indefinitely waiting for it.
-
-  With connection notifications, you can detect the disconnection, reset your
-  state, and re-issue the batched pull request.
-
-  The connections messages are like...
-
-      {:nats_client_connect, conn}
-      {:nats_client_disconnect, conn}
-
-  Where `conn` is a `t:Nats.Client/0` (pid).
-
-  Note that upon calling this, the caller will immediately be sent a
-  `{:nats_client_connect, conn}` message. This is to prevent race conditions and
-  to let the caller consolidate stateful logic in one place (its notification
-  handlers).
-
-  ## Example
-
-      :ok = Nats.Client.monitor(conn)
-
-      :ok = receive do
-        {:nats_client_connect, ^conn} -> :ok
-      end
-
-      # Restart Nats server.
-
-      :ok = receive do
-        {:nats_client_disconnect, ^conn} -> :ok
-      end
-
-      :ok = receive do
-        {:nats_client_connect, ^conn} -> :ok
-      end
-
-  """
-  @spec monitor(t, pid) :: :ok | {:error, binary}
-  def monitor(conn, pid \\ self()) do
-    Connection.call(conn, {:monitor, pid})
-  end
-
   @defaults [
     host: "localhost",
     port: 4222,
     headers: true,
     subs: [],
-    monitor: nil,
+    resub: true,
   ]
 
   @doc """
@@ -237,8 +188,7 @@ defmodule Nats.Client do
   `subs` is a list of subscriptions to automatically subscribe to when the
   client connection starts up.
 
-  `monitor` if true or a pid, the caller or pid will receieve connection
-  notifications. See `monitor/1`.
+  `resub` if false, do not remake subscriptions on reconnections.
 
   ## Examples
 
@@ -248,19 +198,14 @@ defmodule Nats.Client do
       # Automatically subscribe
       {:ok, conn} = Nats.Client.start_link(subs: ["foo", "bar.*"])
 
-      # Receive connection/disconnection notfications.
-      {:ok, conn} = Nats.Client.start_link(monitor: true)
+      # Do not automatically resubscribe on reconnections.
+      {:ok, conn} = Nats.Client.start_link(resub: false)
 
   """
   @spec start_link(Keyword.t) :: {:ok, t} | {:error, reason :: binary}
   def start_link(opts \\ [], gen_opts \\ []) do
     {opts, other_opts} = default_opts(opts, defaults())
     gen_opts = Keyword.merge(other_opts, gen_opts)
-
-    opts = Keyword.update(opts, :monitor, nil, fn
-      true -> self()
-      value -> value
-    end)
 
     Connection.start_link(__MODULE__, opts, gen_opts)
   end
@@ -347,7 +292,6 @@ defmodule Nats.Client do
       requests_v2: %{},
       info: nil,
       max_payload: nil,
-      notify: List.wrap(opts[:monitor])
     }
 
     # Setup our request inbox.
@@ -359,9 +303,6 @@ defmodule Nats.Client do
     |> Enum.map(fn {%Nats.Sub{} = sub, sid} -> Protocol.Sub.new(sub, sid) end)
     |> Map.new(fn sub -> {sub.sid, sub} end)
 
-    # Monitor anyone monitoring us.
-    Enum.each(state.notify, &Process.monitor/1)
-
     state = %{state |
       request_inbox: request_inbox,
       subs: subs,
@@ -370,7 +311,7 @@ defmodule Nats.Client do
 
     case connect_with_handshake(state) do
       {:ok, socket, info} ->
-        notify(:connect, state)
+        notify(:connect)
         {:ok, %{state | socket: socket, info: info, max_payload: info["max_payload"]}}
 
       {:error, reason} ->
@@ -387,7 +328,7 @@ defmodule Nats.Client do
 
     case connect_with_handshake(state) do
       {:ok, socket, info} ->
-        notify(:connect, state)
+        notify(:connect)
         time = DateTime.diff(DateTime.utc_now(), state.closed_at)
         Logger.info("Connection (re)established to #{host}:#{port} after #{time}s")
         {:ok, %{state | socket: socket, info: info, max_payload: info["max_payload"], closed_at: nil}}
@@ -408,10 +349,17 @@ defmodule Nats.Client do
     Logger.error("Connection closed to #{host}:#{port} -- #{info}")
 
     # Notify anyone interested.
-    notify(:disconnect, state)
+    notify(:disconnect)
+
+    # Maybe don't resub.
+    subs = if state.opts[:resub] == false do
+      Enum.take(state.subs, 1)
+    else
+      state.subs
+    end
 
     # Update our state.
-    state = %{state | socket: nil, closed_at: DateTime.utc_now()}
+    state = %{state | socket: nil, subs: subs, closed_at: DateTime.utc_now()}
 
     # Try to reconnect immediately.
     {:connect, :backoff, state}
@@ -524,12 +472,6 @@ defmodule Nats.Client do
     {:reply, {:ok, subs}, state}
   end
 
-  def handle_call({:monitor, pid}, _from, state) do
-    Process.monitor(pid)
-    notify(:connect, pid)
-    {:reply, :ok, %{state | notify: [pid | state.notify]}}
-  end
-
   def handle_info({:tcp_closed, socket}, state) when state.socket == socket do
     {:disconnect, :tcp_closed, state}
   end
@@ -593,9 +535,7 @@ defmodule Nats.Client do
       end
     end)
 
-    notify = List.delete(state.notify, pid)
-
-    {:noreply, %{state | subs: subs, notify: notify}}
+    {:noreply, %{state | subs: subs}}
   end
 
   @doc false
@@ -629,16 +569,8 @@ defmodule Nats.Client do
 
   end
 
-  defp notify(what, pid) when is_pid(pid) do
-    msg = case what do
-      :connect -> {:nats_client_connect, self()}
-      :disconnect -> {:nats_client_disconnect, self()}
-    end
-    send(pid, msg)
-  end
-
-  defp notify(what, state) do
-    Enum.each(state.notify, &notify(what, &1))
+  defp notify(what) when what in [:connect, :disconnect] do
+    :ok = :telemetry.execute([:nats, :client, what], %{}, %{client: self()})
   end
 
   defp resubscribe(socket, subs) do
