@@ -4,6 +4,7 @@ defmodule Nats.Protocol.Msg do
 
   @type t :: %__MODULE__{
     bytes: integer,
+    headers: [binary] | [],
     payload: binary | nil,
     reply_to: binary | nil,
     sid: binary,
