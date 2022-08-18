@@ -172,6 +172,36 @@ defmodule Jetstream do
     Nats.Client.request(pid, subject, Keyword.put(opts, :payload, payload))
   end
 
+  @spec parse_ack(Nats.Protocol.Msg.t | binary) :: %{
+    stream: binary,
+    consumer: binary,
+    delivered: non_neg_integer,
+    stream_seq: non_neg_integer,
+    consumer_seq: non_neg_integer,
+    timestamp: DateTime.t,
+    pending: non_neg_integer,
+    domain: nil | binary,
+    account: nil | binary
+  }
+  def parse_ack(msg_or_reply_to)
+  def parse_ack(%Nats.Protocol.Msg{reply_to: reply_to}), do: parse_ack(reply_to)
+  def parse_ack(reply_to) do
+    case String.split(reply_to, ".") do
+      ["$JS", "ACK", stream, consumer, delivered, stream_seq, consumer_seq, timestamp, pending] ->
+        %{domain: nil, account: nil, stream: stream, consumer: consumer, delivered: delivered, stream_seq: stream_seq, consumer_seq: consumer_seq, timestamp: timestamp, pending: pending}
+      ["$JS", "ACK", domain, account, stream, consumer, delivered, stream_seq, consumer_seq, timestamp, pending] ->
+        %{domain: domain, account: account, stream: stream, consumer: consumer, delivered: delivered, stream_seq: stream_seq, consumer_seq: consumer_seq, timestamp: timestamp, pending: pending}
+    end
+    |> Map.update!(:delivered, &String.to_integer/1)
+    |> Map.update!(:stream_seq, &String.to_integer/1)
+    |> Map.update!(:consumer_seq, &String.to_integer/1)
+    |> Map.update!(:pending, &String.to_integer/1)
+    |> Map.update!(:timestamp, fn timestamp ->
+      String.to_integer(timestamp)
+      |> DateTime.from_unix!(:nanosecond)
+    end)
+  end
+
   defp decode_response(resp) do
     with {:ok, msg} <- resp do
       payload = Jason.decode!(msg.payload)
