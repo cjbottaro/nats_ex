@@ -153,8 +153,45 @@ defmodule Jetstream do
     Nats.Client.request(pid, subject, payload: payload, timeout: expires + 200, v: 1)
   end
 
-  @spec consumer_msg_ack(Nats.Client.t, Nats.Protocol.Msg.t | binary, atom, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, reason}
-  def consumer_msg_ack(client, msg_or_subject, type, opts \\ [])
+  @doc """
+  Ack, nak, or terminate a Jetstream message.
+
+  ## Options
+
+    * `:delay` - `(integer)` - Instruct Jetstream exactly when (in milliseconds)
+    to redeliver the message. This only applies when `type` is `:nak`. Default
+    `nil` (messages will be redelivered immediately).
+
+  ## Examples
+
+  Simple ack...
+
+      iex> consumer_msg_ack(client, msg, :ack)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  You can use the `:reply_to` field directly...
+
+      iex> consumer_msg_ack(client, msg.reply_to, :ack)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Nak with immediate redelivery...
+
+      iex> consumer_msg_ack(client, msg, :nak)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Message will be redelivered 5 seconds from now...
+
+      iex> consumer_msg_ack(client, msg, :nak, delay: 5000)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Terminate message (no redelivery)...
+
+      iex> consumer_msg_ack(client, msg, :term)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  """
+  @spec consumer_msg_ack(Nats.Client.t, Nats.Protocol.Msg.t | binary, :ack | :nak | :term, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, reason}
+  def consumer_msg_ack(client, msg_or_js_ack, type, opts \\ [])
 
   def consumer_msg_ack(pid, msg, type, opts) when is_struct(msg) do
     consumer_msg_ack(pid, msg.reply_to, type, opts)

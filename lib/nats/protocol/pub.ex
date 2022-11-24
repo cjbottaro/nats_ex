@@ -48,7 +48,7 @@ defmodule Nats.Protocol.Pub do
     end
 
     headers = Enum.map(headers, fn {k, v} ->
-      [k, ": ", v, "\r\n"]
+      [to_string(k), ": ", v, "\r\n"]
     end)
 
     header_size = IO.iodata_length(headers) + 12
