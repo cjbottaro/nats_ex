@@ -119,7 +119,7 @@ defmodule Jetstream.Entry do
     with {:ok, _msg} <- resp do
       entries = Stream.repeatedly(fn ->
         receive do
-          m -> m
+          %Nats.Protocol.Msg{} = m -> m
         end
       end)
       |> Enum.reduce_while([], fn msg, entries ->

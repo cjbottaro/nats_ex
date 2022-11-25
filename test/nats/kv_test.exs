@@ -1,4 +1,4 @@
-defmodule Nats.ClientTest do
+defmodule Nats.KvTest do
   use ExUnit.Case
 
   setup_all do
