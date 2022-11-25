@@ -5,6 +5,26 @@ defmodule Jetstream do
 
   @type reason :: binary | atom
 
+  @typedoc """
+  A key-value related error.
+
+  If `{:error, Nats.Protol.Msg.t}`, there was something semantically wrong with
+  the request, and the msg should hold information about why
+
+  If `{:error, term}`, there was probably a connection error.
+  """
+  @type kv_error :: {:error, Nats.Protocol.Msg.t()} | {:error, term}
+
+  @typedoc """
+  Stream sequence id.
+  """
+  @type seq :: pos_integer()
+
+  @typedoc """
+  KV entry revision.
+  """
+  @type revision :: seq
+
   @defaults [
     subjects: [],
     max_age: 0,
@@ -245,21 +265,102 @@ defmodule Jetstream do
     end)
   end
 
-  defdelegate bucket_create(client, name, opts \\ []), to: Nats.Kv.Bucket, as: :create
-  defdelegate bucket_delete(client, name), to: Nats.Kv.Bucket, as: :delete
-  defdelegate bucket_info(client, name), to: Nats.Kv.Bucket, as: :info
-  defdelegate bucket_list(client), to: Nats.Kv.Bucket, as: :list
-
-  defdelegate entry_put(client, bucket, key, value, opts \\ []), to: Nats.Kv.Entry, as: :put
-  defdelegate entry_fetch(client, bucket, key), to: Nats.Kv.Entry, as: :fetch
-  defdelegate entry_value(client, bucket, key), to: Nats.Kv.Entry, as: :value
-  defdelegate entry_history(client, bucket, key), to: Nats.Kv.Entry, as: :history
-
   defp decode_response(resp) do
     with {:ok, msg} <- resp do
       payload = Jason.decode!(msg.payload)
       {:ok, %{msg | payload: payload}}
     end
   end
+
+  alias Jetstream.{Bucket, Entry}
+
+  @doc """
+  Create a KV bucket.
+
+  ## Options
+
+    * `history` - How much history to keep for keys. Default `1`.
+    * `ttl` - Time to live in milliseconds for keys. Default `nil` (no ttl).
+    * `max_size` - Total size limit in bytes of the bucket. Default `nil` (no limit).
+    * `max_value_size` - Max size of a single key value. Default `nil` (use Nats server default, which is typically 1048576 bytes).
+    * `num_replicas` - Replica count of the bucket. Default `1`.
+
+  ## Examples
+
+      # History 1, replication factor 1.
+      bucket_create(client, "my-bucket")
+
+      # History 5, replication factor 3.
+      bucket_create(client, "my-bucket", history: 5, num_replicas: 3)
+
+  """
+  @spec bucket_create(Nats.Client.t, binary, Keyword.t) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_create(client, name, opts \\ []), to: Jetstream.Bucket, as: :create
+
+  @doc """
+  Delete a KV bucket.
+  """
+  @spec bucket_delete(Nats.Client.t, binary) :: :ok | kv_error
+  defdelegate bucket_delete(client, name), to: Jetstream.Bucket, as: :delete
+
+  @doc """
+  Get info on a KV bucket.
+  """
+  @spec bucket_info(Nats.Client.t, binary) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_info(client, name), to: Jetstream.Bucket, as: :info
+
+  @doc """
+  Get a list of all KV buckets.
+  """
+  @spec bucket_list(Nats.Client.t) :: {:ok, [binary]} | kv_error
+  defdelegate bucket_list(client), to: Jetstream.Bucket, as: :list
+
+  @doc """
+  Create or update a KV entry.
+  """
+  @spec entry_put(Nats.Client.t, binary, binary, binary, Keyword.t) :: {:ok, revision} | kv_error
+  defdelegate entry_put(client, bucket, key, value, opts \\ []), to: Jetstream.Entry, as: :put
+
+  @doc """
+  Create a KV entry or error.
+
+  This will error if the key already exists.
+  """
+  @spec entry_create(Nats.Client.t, binary, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_create(client, bucket, key, value), to: Jetstream.Entry, as: :create
+
+  @doc """
+  Fetch a KV entry.
+  """
+  @spec entry_fetch(Nats.Client.t, binary, binary) :: {:ok, Entry.t} | {:error, :not_found} | kv_error
+  defdelegate entry_fetch(client, bucket, key), to: Jetstream.Entry, as: :fetch
+
+  @doc """
+  Get a KV entry's value.
+
+  If the key does not exist, returns `default` (which defaults to `nil`).
+
+  ## Example
+
+      iex> entry_value(client, "foo", "bar")
+      {:ok, nil}
+
+      iex> entry_put(client, "foo", "bar", "baz")
+      {:ok, _revision}
+
+      iex> entry_value(client, "foo", "bar")
+      {:ok, "baz"}
+
+  """
+  @spec entry_value(Nats.Client.t, binary, binary, term) :: {:ok, binary | term} | kv_error
+  defdelegate entry_value(client, bucket, key, default \\ nil), to: Jetstream.Entry, as: :value
+
+  @doc """
+  Get the history of a KV key.
+
+  The returned list _should_ be sorted in descending order of revision (newest revision first).
+  """
+  @spec entry_history(Nats.Client.t, binary, binary) :: {:ok, [Entry.t]} | kv_error
+  defdelegate entry_history(client, bucket, key), to: Jetstream.Entry, as: :history
 
 end

@@ -1,7 +1,18 @@
-defmodule Nats.Kv.Bucket do
+defmodule Jetstream.Bucket do
+  @moduledoc """
+  Represents an bucket when using Jetstream as a KV store.
+  """
+
   defstruct [:name, :history, :ttl, :max_size, :max_value_size, :num_replicas]
 
-  @type t :: %__MODULE__{}
+  @type t :: %__MODULE__{
+    name: binary,
+    history: 1..64,
+    ttl: nil | pos_integer,
+    max_size: nil | pos_integer,
+    max_value_size: nil | pos_integer,
+    num_replicas: 1..5
+  }
 
   @opts_schema NimbleOptions.new!(
     history: [
@@ -33,7 +44,8 @@ defmodule Nats.Kv.Bucket do
   @info_type   "io.nats.jetstream.api.v1.stream_info_response"
   @list_type   "io.nats.jetstream.api.v1.stream_names_response"
 
-  @spec create(Nats.Client.t, binary, Keyword.t) :: {:ok, t} | {:error, Nats.Msg.t} | {:error, :term}
+  @spec create(Nats.Client.t, binary, Keyword.t) :: {:ok, t} | Jetstream.kv_error
+  @doc false
 
   def create(client, name, opts \\ []) do
     with {:ok, opts} <- NimbleOptions.validate(opts, @opts_schema) do
@@ -60,7 +72,8 @@ defmodule Nats.Kv.Bucket do
     end
   end
 
-  @spec delete(Nats.Client.t, binary) :: :ok | {:error, Nats.Msg.t} | {:error, term}
+  @spec delete(Nats.Client.t, binary) :: :ok | Jetstream.kv_error
+  @doc false
 
   def delete(client, name) do
     case Jetstream.stream_delete(client, "KV_#{name}") do
@@ -71,6 +84,9 @@ defmodule Nats.Kv.Bucket do
     end
   end
 
+  @spec info(Nats.Client.t, binary) :: {:ok, t} | Jetstream.kv_error
+  @doc false
+
   def info(client, name) do
     case Jetstream.stream_info(client, "KV_#{name}") do
       {:ok, %{payload: %{"type" => @info_type, "config" => config}}} -> {:ok, config_to_bucket(config)}
@@ -79,7 +95,8 @@ defmodule Nats.Kv.Bucket do
     end
   end
 
-  @spec list(Nats.Client.t) :: {:ok, [binary]} | {:error, Nats.Msg.t} | {:error, term}
+  @spec list(Nats.Client.t) :: {:ok, [binary]} | Jetstream.kv_error
+  @doc false
 
   def list(client) do
     case Jetstream.stream_list(client) do

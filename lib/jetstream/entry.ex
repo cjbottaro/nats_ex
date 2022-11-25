@@ -1,10 +1,21 @@
-defmodule Nats.Kv.Entry do
+defmodule Jetstream.Entry do
+  @moduledoc """
+  Represents an entry when using Jetstream as a KV store.
+  """
+
   defstruct [:bucket, :key, :value, :created_at, :revision]
 
-  @type t :: %__MODULE__{}
+  @type t :: %__MODULE__{
+    bucket: binary,
+    key: binary,
+    value: binary,
+    created_at: DateTime.t,
+    revision: pos_integer
+  }
 
-  @spec put(Nats.Client.t, binary, binary, binary) :: {:ok, integer} | {:error, term}
-  @spec put(Nats.Client.t, binary, binary, binary, Keyword.t) :: {:ok, integer} | {:error, term}
+  @spec put(Nats.Client.t, binary, binary, binary) :: {:ok, integer} | Jetstream.kv_error
+  @spec put(Nats.Client.t, binary, binary, binary, Keyword.t) :: {:ok, integer} | Jetstream.kv_error
+  @doc false
 
   def put(client, bucket, key, value, opts \\ []) do
     headers = case opts[:revision] do
@@ -19,11 +30,15 @@ defmodule Nats.Kv.Entry do
     end
   end
 
+  @spec create(Nats.Client.t, binary, binary, binary) :: {:ok, pos_integer} | Jetstream.kv_error
+  @doc false
+
   def create(client, bucket, key, value) do
     put(client, bucket, key, value, revision: 0)
   end
 
-  @spec fetch(Nats.Client.t, binary, binary) :: {:ok, t} | {:error, :not_found} | {:error, term}
+  @spec fetch(Nats.Client.t, binary, binary) :: {:ok, t} | {:error, :not_found} | Jetstream.kv_error
+  @doc false
 
   def fetch(client, bucket, key) do
     case Nats.Client.request(client, "$JS.API.DIRECT.GET.KV_#{bucket}.$KV.#{bucket}.#{key}") do
@@ -54,7 +69,8 @@ defmodule Nats.Kv.Entry do
     end
   end
 
-  @spec fetch_value(Nats.Client.t, binary, binary) :: {:ok, binary} | {:error, term}
+  @spec fetch_value(Nats.Client.t, binary, binary) :: {:ok, binary} | Jetstream.kv_error
+  @doc false
 
   def fetch_value(client, bucket, key) do
     case fetch(client, bucket, key) do
@@ -63,8 +79,9 @@ defmodule Nats.Kv.Entry do
     end
   end
 
-  @spec value(Nats.Client.t, binary, binary) :: {:ok, binary} | {:error, term}
-  @spec value(Nats.Client.t, binary, binary, term) :: {:ok, term} | {:error, term}
+  @spec value(Nats.Client.t, binary, binary) :: {:ok, binary} | Jetstream.kv_error
+  @spec value(Nats.Client.t, binary, binary, term) :: {:ok, term} | Jetstream.kv_error
+  @doc false
 
   def value(client, bucket, key, default \\ nil) do
     case fetch(client, bucket, key) do
@@ -72,6 +89,9 @@ defmodule Nats.Kv.Entry do
       {:ok, entry} -> {:ok, entry.value}
     end
   end
+
+  @spec history(Nats.Client.t, binary, binary) :: {:ok, [t]} | Jetstream.kv_error
+  @doc false
 
   def history(client, bucket, key) do
     stream = "KV_#{bucket}"
