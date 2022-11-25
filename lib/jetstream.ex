@@ -2,7 +2,6 @@ defmodule Jetstream do
   @moduledoc """
   Helper functions for the Jetstream API.
   """
-  import Nats.Utils
 
   @type reason :: binary | atom
 
@@ -35,7 +34,7 @@ defmodule Jetstream do
   """
   @spec stream_create(Nats.Client.t, binary, Keyword.t) :: {:ok, map} | {:error, term}
   def stream_create(pid, name, opts \\ []) do
-    {opts, _trash} = default_opts(opts, @defaults)
+    opts = Keyword.merge(@defaults, opts)
 
     payload = Keyword.put(opts, :name, name) |> Map.new()
 
@@ -67,9 +66,16 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def stream_msg_get(pid, name, seq) do
-    payload = %{seq: seq}
-    Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: payload)
+  @spec stream_msg_get(Nats.Client.t, binary, integer) :: {:ok, Nats.Msg.t} | {:error, term}
+
+  def stream_msg_get(pid, name, seq) when is_integer(seq) do
+    stream_msg_get(pid, name, seq: seq)
+  end
+
+  @spec stream_msg_get(Nats.Client.t, binary, Keyword.t) :: {:ok, Nats.Msg.t} | {:error, term}
+
+  def stream_msg_get(pid, name, opts) do
+    Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: Map.new(opts))
     |> decode_response()
   end
 
@@ -90,7 +96,7 @@ defmodule Jetstream do
       case Nats.Client.request(pid, subject, opts) do
         {:ok, %{bytes: 0}} -> :ok
         {:ok, %{payload: json}} -> case Jason.decode(json) do
-          {:ok, %{"error" => %{"description" => reason}}} -> {:error, reason}
+          {:ok, %{"error" => error}} -> {:error, error}
           {:ok, payload} -> {:ok, payload}
           {:error, reason} -> {:error, reason}
         end
@@ -238,6 +244,16 @@ defmodule Jetstream do
       |> DateTime.from_unix!(:nanosecond)
     end)
   end
+
+  defdelegate bucket_create(client, name, opts \\ []), to: Nats.Kv.Bucket, as: :create
+  defdelegate bucket_delete(client, name), to: Nats.Kv.Bucket, as: :delete
+  defdelegate bucket_info(client, name), to: Nats.Kv.Bucket, as: :info
+  defdelegate bucket_list(client), to: Nats.Kv.Bucket, as: :list
+
+  defdelegate entry_put(client, bucket, key, value, opts \\ []), to: Nats.Kv.Entry, as: :put
+  defdelegate entry_fetch(client, bucket, key), to: Nats.Kv.Entry, as: :fetch
+  defdelegate entry_value(client, bucket, key), to: Nats.Kv.Entry, as: :value
+  defdelegate entry_history(client, bucket, key), to: Nats.Kv.Entry, as: :history
 
   defp decode_response(resp) do
     with {:ok, msg} <- resp do
