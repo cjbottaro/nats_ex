@@ -298,6 +298,14 @@ defmodule Jetstream do
   defdelegate bucket_create(client, name, opts \\ []), to: Jetstream.Bucket, as: :create
 
   @doc """
+  Update a KV bucket.
+
+  This takes the same options as `create/3`.
+  """
+  @spec bucket_update(Nats.Client.t, binary, Keyword.t) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_update(client, name, opts), to: Jetstream.Bucket, as: :update
+
+  @doc """
   Delete a KV bucket.
   """
   @spec bucket_delete(Nats.Client.t, binary) :: :ok | kv_error
@@ -354,6 +362,77 @@ defmodule Jetstream do
   """
   @spec entry_value(Nats.Client.t, binary, binary, term) :: {:ok, binary | term} | kv_error
   defdelegate entry_value(client, bucket, key, default \\ nil), to: Jetstream.Entry, as: :value
+
+  @doc """
+  Delete a KV key.
+
+  Mark a key as deleted. Previous entries will still show up in history.
+
+  ## Example
+
+      iex> entry_put(client, "my-bucket", "my-key", "foobar")
+      {:ok, 1}
+
+      iex> entry_delete(client, "my-bucket", "my-key")
+      {:ok, 2}
+
+      iex> entry_fetch(client, "my-bucket", "my-key")
+      {:error, :not_found}
+
+      iex> {:ok, [e2, e1]} = entry_history(client, "my-bucket", "my-key")
+      ...
+
+      iex> e2
+      %Jetstream.Entry{
+        delete: true,
+        value: nil,
+        revision: 2,
+        ...
+      }
+
+      iex> e1
+      %Jetstream.Entry{
+        delete: false,
+        value: "foobar",
+        revision: 1,
+        ...
+      }
+
+  """
+  @spec entry_delete(Nats.Client.t, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_delete(client, bucket, key), to: Jetstream.Entry, as: :delete
+
+  @doc """
+  Purge a KV key.
+
+  Like deleting a key, but history will only show the purge entry, all previous
+  entries will be removed.
+
+  ## Example
+
+      iex> entry_put(client, "my-bucket", "my-key", "foobar")
+      {:ok, 1}
+
+      iex> entry_delete(client, "my-bucket", "my-key")
+      {:ok, 2}
+
+      iex> entry_fetch(client, "my-bucket", "my-key")
+      {:error, :not_found}
+
+      iex> {:ok, [e2]} = entry_history(client, "my-bucket", "my-key")
+      ...
+
+      iex> e2
+      %Jetstream.Entry{
+        operation: :purge,
+        value: nil,
+        revision: 2,
+        ...
+      }
+
+  """
+  @spec entry_purge(Nats.Client.t, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_purge(client, bucket, key), to: Jetstream.Entry, as: :purge
 
   @doc """
   Get the history of a KV key.

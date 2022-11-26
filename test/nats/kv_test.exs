@@ -16,6 +16,45 @@ defmodule Nats.KvTest do
     :ok
   end
 
+  test "ttl", %{client: client} do
+    {:ok, _} = Jetstream.bucket_update(client, "kv-test", ttl: 100)
+
+    Jetstream.entry_put(client, "kv-test", "k1", "v1")
+    {:ok, "v1"} = Jetstream.entry_value(client, "kv-test", "k1")
+
+    Process.sleep(100)
+
+    {:error, :not_found} = Jetstream.entry_fetch(client, "kv-test", "k1")
+  end
+
+  test "delete", %{client: client} do
+    Jetstream.entry_put(client, "kv-test", "k1", "v1")
+    Jetstream.entry_delete(client, "kv-test", "k1")
+
+    {:error, :not_found} = Jetstream.entry_fetch(client, "kv-test", "k1")
+
+    {:ok, [e2, e1]} = Jetstream.entry_history(client, "kv-test", "k1")
+
+    assert e2.operation == :delete
+    assert e2.revision == 2
+
+    assert e1.operation == :put
+    assert e1.revision == 1
+    assert e1.value == "v1"
+  end
+
+  test "purge", %{client: client} do
+    Jetstream.entry_put(client, "kv-test", "k1", "v1")
+    Jetstream.entry_purge(client, "kv-test", "k1")
+
+    {:error, :not_found} = Jetstream.entry_fetch(client, "kv-test", "k1")
+
+    {:ok, [e2]} = Jetstream.entry_history(client, "kv-test", "k1")
+
+    assert e2.operation == :purge
+    assert e2.revision == 2
+  end
+
   test "history", %{client: client} do
     Jetstream.entry_put(client, "kv-test", "k1", "v1")
     Jetstream.entry_put(client, "kv-test", "k1", "v2")

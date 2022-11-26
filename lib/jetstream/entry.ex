@@ -3,14 +3,15 @@ defmodule Jetstream.Entry do
   Represents an entry when using Jetstream as a KV store.
   """
 
-  defstruct [:bucket, :key, :value, :created_at, :revision]
+  defstruct [:bucket, :key, :value, :created_at, :revision, :operation]
 
   @type t :: %__MODULE__{
     bucket: binary,
     key: binary,
     value: binary,
     created_at: DateTime.t,
-    revision: pos_integer
+    revision: pos_integer,
+    operation: :put | :delete | :purge
   }
 
   @spec put(Nats.Client.t, binary, binary, binary) :: {:ok, integer} | Jetstream.kv_error
@@ -21,6 +22,21 @@ defmodule Jetstream.Entry do
     headers = case opts[:revision] do
       nil -> []
       n -> [{"Nats-Expected-Last-Subject-Sequence", n}]
+    end
+
+    headers = case opts[:operation] do
+      :delete -> [
+        {"KV-Operation", "DEL"}
+        | headers
+      ]
+
+      :purge ->[
+        {"KV-Operation", "PURGE"},
+        {"Nats-Rollup", "sub"}
+        | headers
+      ]
+
+      _operation -> headers
     end
 
     case Jetstream.publish(client, "$KV.#{bucket}.#{key}", value, headers: headers) do
@@ -45,25 +61,38 @@ defmodule Jetstream.Entry do
       {:ok, %{headers: ["NATS/1.0 404 Message Not Found"]}} -> {:error, :not_found}
 
       {:ok, msg} ->
-        revision = Enum.find_value(msg.headers, fn
-          <<"Nats-Sequence: ", n::binary>> -> String.to_integer(n)
-          _ -> false
-        end)
-
-        created_at = Enum.find_value(msg.headers, fn
-          <<"Nats-Time-Stamp: ", dt::binary>> ->
-            {:ok, created_at, 0} = DateTime.from_iso8601(dt)
-            created_at
-          _ -> false
-        end)
-
-        {:ok, %__MODULE__{
+        entry = %__MODULE__{
           bucket: bucket,
           key: key,
           value: msg.payload,
-          created_at: created_at,
-          revision: revision
-        }}
+          operation: :put
+        }
+
+        entry = Enum.reduce(msg.headers, entry, fn
+
+          <<"Nats-Sequence: ", n::binary>>, entry ->
+            revision = String.to_integer(n)
+            %{entry | revision: revision}
+
+          <<"Nats-Time-Stamp: ", dt::binary>>, entry ->
+            {:ok, created_at, 0} = DateTime.from_iso8601(dt)
+            %{entry | created_at: created_at}
+
+          "KV-Operation: DEL", entry ->
+            %{entry | operation: :delete}
+
+          "KV-Operation: PURGE", entry ->
+            %{entry | operation: :purge}
+
+          _header, entry -> entry
+
+        end)
+
+        if entry.operation == :put do
+          {:ok, entry}
+        else
+          {:error, :not_found}
+        end
 
       error -> error
     end
@@ -88,6 +117,14 @@ defmodule Jetstream.Entry do
       {:error, :not_found} -> {:ok, default}
       {:ok, entry} -> {:ok, entry.value}
     end
+  end
+
+  def delete(client, bucket, key) do
+    put(client, bucket, key, "", operation: :delete)
+  end
+
+  def purge(client, bucket, key) do
+    put(client, bucket, key, "", operation: :purge)
   end
 
   @spec history(Nats.Client.t, binary, binary) :: {:ok, [t]} | Jetstream.kv_error
@@ -131,12 +168,19 @@ defmodule Jetstream.Entry do
 
         [_, _, key] = String.split(msg.subject, ".")
 
+        operation = Enum.find_value(msg.headers, :put, fn
+          "KV-Operation: DEL" -> :delete
+          "KV-Operation: PURGE" -> :purge
+          _header -> false
+        end)
+
         entry = %__MODULE__{
           bucket: bucket,
           key: key,
           value: msg.payload,
           created_at: timestamp,
-          revision: seq
+          revision: seq,
+          operation: operation
         }
 
         entries = [entry | entries]

@@ -40,6 +40,7 @@ defmodule Jetstream.Bucket do
   )
 
   @create_type "io.nats.jetstream.api.v1.stream_create_response"
+  @update_type "io.nats.jetstream.api.v1.stream_update_response"
   @delete_type "io.nats.jetstream.api.v1.stream_delete_response"
   @info_type   "io.nats.jetstream.api.v1.stream_info_response"
   @list_type   "io.nats.jetstream.api.v1.stream_names_response"
@@ -49,23 +50,24 @@ defmodule Jetstream.Bucket do
 
   def create(client, name, opts \\ []) do
     with {:ok, opts} <- NimbleOptions.validate(opts, @opts_schema) do
-      max_age = opts[:max_age] && (opts[:max_age] * 1_000_000)
-      resp = Jetstream.stream_create(client, "KV_#{name}",
-        discard: :new,
-        allow_rollup_hdrs: true,
-        deny_delete: true,
-        allow_direct: true,
-        subjects: ["$KV.#{name}.>"],
-        max_msgs_per_subject: opts[:history],
-        max_age: max_age,
-        duplicate_window: max_age,
-        max_bytes: opts[:max_size],
-        max_msg_size: opts[:max_value_size],
-        num_replicas: opts[:num_replicas]
-      )
+      config = to_stream_config(name, opts)
+      resp = Jetstream.stream_create(client, "KV_#{name}", config)
 
       case resp do
         {:ok, %{payload: %{"type" => @create_type, "config" => config}}} -> {:ok, config_to_bucket(config)}
+        {:ok, msg} -> {:error, msg}
+        error -> error
+      end
+    end
+  end
+
+  @doc false
+  def update(client, name, opts) do
+    with {:ok, opts} <- NimbleOptions.validate(opts, @opts_schema) do
+      config = to_stream_config(name, opts)
+
+      case Jetstream.stream_update(client, "KV_#{name}", config) do
+        {:ok, %{payload: %{"type" => @update_type, "config" => config}}} -> {:ok, config_to_bucket(config)}
         {:ok, msg} -> {:error, msg}
         error -> error
       end
@@ -112,6 +114,24 @@ defmodule Jetstream.Bucket do
     end
   end
 
+  defp to_stream_config(name, opts) do
+    max_age = opts[:ttl] && (opts[:ttl] * 1_000_000)
+
+    [
+      discard: :new,
+      allow_rollup_hdrs: true,
+      deny_delete: true,
+      allow_direct: true,
+      subjects: ["$KV.#{name}.>"],
+      max_msgs_per_subject: opts[:history],
+      max_age: max_age,
+      duplicate_window: max_age,
+      max_bytes: opts[:max_size],
+      max_msg_size: opts[:max_value_size],
+      num_replicas: opts[:num_replicas]
+    ]
+  end
+
   defp config_to_bucket(config) do
     name = String.replace_prefix(config["name"], "KV_", "")
 
@@ -139,4 +159,5 @@ defmodule Jetstream.Bucket do
       num_replicas: config["num_replicas"]
     }
   end
+
 end
