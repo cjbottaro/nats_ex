@@ -325,8 +325,11 @@ defmodule Jetstream do
 
   @doc """
   Create or update a KV entry.
+
+  If `value` is a map, it will be automatically serialized as JSON and
+  deserialized by `entry_fetch/3` and `entry_value/4`.
   """
-  @spec entry_put(Nats.Client.t, binary, binary, binary, Keyword.t) :: {:ok, revision} | kv_error
+  @spec entry_put(Nats.Client.t, binary, binary, Entry.value, Keyword.t) :: {:ok, revision} | kv_error
   defdelegate entry_put(client, bucket, key, value, opts \\ []), to: Jetstream.Entry, as: :put
 
   @doc """

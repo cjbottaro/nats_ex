@@ -93,4 +93,9 @@ defmodule Nats.KvTest do
     assert e.created_at == e3.created_at
   end
 
+  test "json", %{client: client} do
+    Jetstream.entry_put(client, "kv-test", "foo", %{"a" => "b"})
+    {:ok, %{"a" => "b"}} = Jetstream.entry_value(client, "kv-test", "foo")
+  end
+
 end

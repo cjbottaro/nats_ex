@@ -8,20 +8,29 @@ defmodule Jetstream.Entry do
   @type t :: %__MODULE__{
     bucket: binary,
     key: binary,
-    value: binary,
+    value: value,
     created_at: DateTime.t,
     revision: pos_integer,
     operation: :put | :delete | :purge
   }
 
-  @spec put(Nats.Client.t, binary, binary, binary) :: {:ok, integer} | Jetstream.kv_error
-  @spec put(Nats.Client.t, binary, binary, binary, Keyword.t) :: {:ok, integer} | Jetstream.kv_error
+  @type value :: binary | map
+
+  @spec put(Nats.Client.t, binary, binary, value) :: {:ok, integer} | Jetstream.kv_error
+  @spec put(Nats.Client.t, binary, binary, value, Keyword.t) :: {:ok, integer} | Jetstream.kv_error
   @doc false
 
   def put(client, bucket, key, value, opts \\ []) do
+    headers = Keyword.get(opts, :headers, [])
+
+    {value, headers} = case value do
+      b when is_binary(b) -> {b, headers}
+      m when is_map(m) -> {Jason.encode!(value), [{"Content-Type", "application/json"} | headers]}
+    end
+
     headers = case opts[:revision] do
-      nil -> []
-      n -> [{"Nats-Expected-Last-Subject-Sequence", n}]
+      nil -> headers
+      n -> [{"Nats-Expected-Last-Subject-Sequence", n} | headers]
     end
 
     headers = case opts[:operation] do
@@ -83,6 +92,9 @@ defmodule Jetstream.Entry do
 
           "KV-Operation: PURGE", entry ->
             %{entry | operation: :purge}
+
+          "Content-Type: application/json", entry ->
+            %{entry | value: Jason.decode!(entry.value)}
 
           _header, entry -> entry
 
