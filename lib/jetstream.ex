@@ -2,9 +2,28 @@ defmodule Jetstream do
   @moduledoc """
   Helper functions for the Jetstream API.
   """
-  import Nats.Utils
 
   @type reason :: binary | atom
+
+  @typedoc """
+  A key-value related error.
+
+  If `{:error, Nats.Protol.Msg.t}`, there was something semantically wrong with
+  the request, and the msg should hold information about why
+
+  If `{:error, term}`, there was probably a connection error.
+  """
+  @type kv_error :: {:error, Nats.Protocol.Msg.t()} | {:error, term}
+
+  @typedoc """
+  Stream sequence id.
+  """
+  @type seq :: pos_integer()
+
+  @typedoc """
+  KV entry revision.
+  """
+  @type revision :: seq
 
   @defaults [
     subjects: [],
@@ -35,7 +54,7 @@ defmodule Jetstream do
   """
   @spec stream_create(Nats.Client.t, binary, Keyword.t) :: {:ok, map} | {:error, term}
   def stream_create(pid, name, opts \\ []) do
-    {opts, _trash} = default_opts(opts, @defaults)
+    opts = Keyword.merge(@defaults, opts)
 
     payload = Keyword.put(opts, :name, name) |> Map.new()
 
@@ -67,9 +86,16 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def stream_msg_get(pid, name, seq) do
-    payload = %{seq: seq}
-    Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: payload)
+  @spec stream_msg_get(Nats.Client.t, binary, integer) :: {:ok, Nats.Msg.t} | {:error, term}
+
+  def stream_msg_get(pid, name, seq) when is_integer(seq) do
+    stream_msg_get(pid, name, seq: seq)
+  end
+
+  @spec stream_msg_get(Nats.Client.t, binary, Keyword.t) :: {:ok, Nats.Msg.t} | {:error, term}
+
+  def stream_msg_get(pid, name, opts) do
+    Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: Map.new(opts))
     |> decode_response()
   end
 
@@ -90,7 +116,7 @@ defmodule Jetstream do
       case Nats.Client.request(pid, subject, opts) do
         {:ok, %{bytes: 0}} -> :ok
         {:ok, %{payload: json}} -> case Jason.decode(json) do
-          {:ok, %{"error" => %{"description" => reason}}} -> {:error, reason}
+          {:ok, %{"error" => error}} -> {:error, error}
           {:ok, payload} -> {:ok, payload}
           {:error, reason} -> {:error, reason}
         end
@@ -153,8 +179,45 @@ defmodule Jetstream do
     Nats.Client.request(pid, subject, payload: payload, timeout: expires + 200, v: 1)
   end
 
-  @spec consumer_msg_ack(Nats.Client.t, Nats.Protocol.Msg.t | binary, atom, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, reason}
-  def consumer_msg_ack(client, msg_or_subject, type, opts \\ [])
+  @doc """
+  Ack, nak, or terminate a Jetstream message.
+
+  ## Options
+
+    * `:delay` - `(integer)` - Instruct Jetstream exactly when (in milliseconds)
+    to redeliver the message. This only applies when `type` is `:nak`. Default
+    `nil` (messages will be redelivered immediately).
+
+  ## Examples
+
+  Simple ack...
+
+      iex> consumer_msg_ack(client, msg, :ack)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  You can use the `:reply_to` field directly...
+
+      iex> consumer_msg_ack(client, msg.reply_to, :ack)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Nak with immediate redelivery...
+
+      iex> consumer_msg_ack(client, msg, :nak)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Message will be redelivered 5 seconds from now...
+
+      iex> consumer_msg_ack(client, msg, :nak, delay: 5000)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  Terminate message (no redelivery)...
+
+      iex> consumer_msg_ack(client, msg, :term)
+      {:ok, %Nats.Protocol.Msg{...}}
+
+  """
+  @spec consumer_msg_ack(Nats.Client.t, Nats.Protocol.Msg.t | binary, :ack | :nak | :term, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, reason}
+  def consumer_msg_ack(client, msg_or_js_ack, type, opts \\ [])
 
   def consumer_msg_ack(pid, msg, type, opts) when is_struct(msg) do
     consumer_msg_ack(pid, msg.reply_to, type, opts)
@@ -208,5 +271,178 @@ defmodule Jetstream do
       {:ok, %{msg | payload: payload}}
     end
   end
+
+  alias Jetstream.{Bucket, Entry}
+
+  @doc """
+  Create a KV bucket.
+
+  ## Options
+
+    * `history` - How much history to keep for keys. Default `1`.
+    * `ttl` - Time to live in milliseconds for keys. Default `nil` (no ttl).
+    * `max_size` - Total size limit in bytes of the bucket. Default `nil` (no limit).
+    * `max_value_size` - Max size of a single key value. Default `nil` (use Nats server default, which is typically 1048576 bytes).
+    * `num_replicas` - Replica count of the bucket. Default `1`.
+
+  ## Examples
+
+      # History 1, replication factor 1.
+      bucket_create(client, "my-bucket")
+
+      # History 5, replication factor 3.
+      bucket_create(client, "my-bucket", history: 5, num_replicas: 3)
+
+  """
+  @spec bucket_create(Nats.Client.t, binary, Keyword.t) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_create(client, name, opts \\ []), to: Jetstream.Bucket, as: :create
+
+  @doc """
+  Update a KV bucket.
+
+  This takes the same options as `create/3`.
+  """
+  @spec bucket_update(Nats.Client.t, binary, Keyword.t) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_update(client, name, opts), to: Jetstream.Bucket, as: :update
+
+  @doc """
+  Delete a KV bucket.
+  """
+  @spec bucket_delete(Nats.Client.t, binary) :: :ok | kv_error
+  defdelegate bucket_delete(client, name), to: Jetstream.Bucket, as: :delete
+
+  @doc """
+  Get info on a KV bucket.
+  """
+  @spec bucket_info(Nats.Client.t, binary) :: {:ok, Bucket.t} | kv_error
+  defdelegate bucket_info(client, name), to: Jetstream.Bucket, as: :info
+
+  @doc """
+  Get a list of all KV buckets.
+  """
+  @spec bucket_list(Nats.Client.t) :: {:ok, [binary]} | kv_error
+  defdelegate bucket_list(client), to: Jetstream.Bucket, as: :list
+
+  @doc """
+  Create or update a KV entry.
+
+  If `value` is a map, it will be automatically serialized as JSON and
+  deserialized by `entry_fetch/3` and `entry_value/4`.
+  """
+  @spec entry_put(Nats.Client.t, binary, binary, Entry.value, Keyword.t) :: {:ok, revision} | kv_error
+  defdelegate entry_put(client, bucket, key, value, opts \\ []), to: Jetstream.Entry, as: :put
+
+  @doc """
+  Create a KV entry or error.
+
+  This will error if the key already exists.
+  """
+  @spec entry_create(Nats.Client.t, binary, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_create(client, bucket, key, value), to: Jetstream.Entry, as: :create
+
+  @doc """
+  Fetch a KV entry.
+  """
+  @spec entry_fetch(Nats.Client.t, binary, binary) :: {:ok, Entry.t} | {:error, :not_found} | kv_error
+  defdelegate entry_fetch(client, bucket, key), to: Jetstream.Entry, as: :fetch
+
+  @doc """
+  Get a KV entry's value.
+
+  If the key does not exist, returns `default` (which defaults to `nil`).
+
+  ## Example
+
+      iex> entry_value(client, "foo", "bar")
+      {:ok, nil}
+
+      iex> entry_put(client, "foo", "bar", "baz")
+      {:ok, _revision}
+
+      iex> entry_value(client, "foo", "bar")
+      {:ok, "baz"}
+
+  """
+  @spec entry_value(Nats.Client.t, binary, binary, term) :: {:ok, binary | term} | kv_error
+  defdelegate entry_value(client, bucket, key, default \\ nil), to: Jetstream.Entry, as: :value
+
+  @doc """
+  Delete a KV key.
+
+  Mark a key as deleted. Previous entries will still show up in history.
+
+  ## Example
+
+      iex> entry_put(client, "my-bucket", "my-key", "foobar")
+      {:ok, 1}
+
+      iex> entry_delete(client, "my-bucket", "my-key")
+      {:ok, 2}
+
+      iex> entry_fetch(client, "my-bucket", "my-key")
+      {:error, :not_found}
+
+      iex> {:ok, [e2, e1]} = entry_history(client, "my-bucket", "my-key")
+      ...
+
+      iex> e2
+      %Jetstream.Entry{
+        delete: true,
+        value: nil,
+        revision: 2,
+        ...
+      }
+
+      iex> e1
+      %Jetstream.Entry{
+        delete: false,
+        value: "foobar",
+        revision: 1,
+        ...
+      }
+
+  """
+  @spec entry_delete(Nats.Client.t, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_delete(client, bucket, key), to: Jetstream.Entry, as: :delete
+
+  @doc """
+  Purge a KV key.
+
+  Like deleting a key, but history will only show the purge entry, all previous
+  entries will be removed.
+
+  ## Example
+
+      iex> entry_put(client, "my-bucket", "my-key", "foobar")
+      {:ok, 1}
+
+      iex> entry_delete(client, "my-bucket", "my-key")
+      {:ok, 2}
+
+      iex> entry_fetch(client, "my-bucket", "my-key")
+      {:error, :not_found}
+
+      iex> {:ok, [e2]} = entry_history(client, "my-bucket", "my-key")
+      ...
+
+      iex> e2
+      %Jetstream.Entry{
+        operation: :purge,
+        value: nil,
+        revision: 2,
+        ...
+      }
+
+  """
+  @spec entry_purge(Nats.Client.t, binary, binary) :: {:ok, revision} | kv_error
+  defdelegate entry_purge(client, bucket, key), to: Jetstream.Entry, as: :purge
+
+  @doc """
+  Get the history of a KV key.
+
+  The returned list _should_ be sorted in descending order of revision (newest revision first).
+  """
+  @spec entry_history(Nats.Client.t, binary, binary) :: {:ok, [Entry.t]} | kv_error
+  defdelegate entry_history(client, bucket, key), to: Jetstream.Entry, as: :history
 
 end
