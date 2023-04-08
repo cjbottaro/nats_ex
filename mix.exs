@@ -26,7 +26,7 @@ defmodule Nats.MixProject do
       {:jason, "~> 1.0"},
       {:gen_stage, "~> 1.0"},
       {:telemetry, "~> 0.4 or ~> 1.0"},
-      {:nimble_options, "~> 0.4"},
+      {:nimble_options, "~> 1.0"},
       {:ex_doc, "~> 0.0", only: :dev},
     ]
   end

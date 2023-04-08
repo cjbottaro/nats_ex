@@ -25,6 +25,26 @@ defmodule Jetstream do
   """
   @type revision :: seq
 
+  @type stream_create_opt ::
+    {:allow_direct, boolean}
+    | {:allow_rollup_hdrs, boolean}
+    | {:deny_delete, boolean}
+    | {:deny_purge, boolean}
+    | {:discard, :old | :new}
+    | {:duplicate_window, non_neg_integer}
+    | {:max_age, non_neg_integer}
+    | {:max_bytes, non_neg_integer | -1}
+    | {:max_consumers, non_neg_integer | -1}
+    | {:max_msg_size, non_neg_integer | -1}
+    | {:max_msgs, non_neg_integer | -1}
+    | {:max_msgs_per_subject, non_neg_integer | -1}
+    | {:mirror_direct, boolean}
+    | {:num_replicas, non_neg_integer}
+    | {:retention, :limits | :interest | :workqueue}
+    | {:sealed, boolean}
+    | {:storage, :file | :memory}
+    | {:subject, [binary]}
+
   @defaults [
     subjects: [],
     max_age: 0,
@@ -52,7 +72,8 @@ defmodule Jetstream do
   {:ok, _msg} = stream_create(conn, "foo", subjects: ["foo.*"])
   ```
   """
-  @spec stream_create(Nats.Client.t, binary, Keyword.t) :: {:ok, map} | {:error, term}
+  @spec stream_create(Nats.Client.t, binary, [stream_create_opt]) :: {:ok, map} | {:error, term}
+
   def stream_create(pid, name, opts \\ []) do
     opts = Keyword.merge(@defaults, opts)
 
