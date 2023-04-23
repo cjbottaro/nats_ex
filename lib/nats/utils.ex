@@ -38,4 +38,41 @@ defmodule Nats.Utils do
     end
   end
 
+  @spec format_duration(integer, atom) :: binary
+
+  def format_duration(quantity, unit) do
+    usec =
+      case unit do
+        :microsecond -> quantity
+        :millisecond -> quantity * 1000
+        :second -> quantity * 1000 * 1000
+      end
+
+    cond do
+      usec < 1_000 ->
+        "#{usec}μs"
+
+      usec < 1_000_000 ->
+        ms = (usec / 1_000) |> round()
+        "#{ms}ms"
+
+      usec < 60_000_000 ->
+        s = div(usec, 1_000_000)
+
+        case div(usec - s * 1_000_000, 1_000) do
+          0 -> "#{s}s"
+          ms -> "#{s}s#{ms}ms"
+        end
+
+      true ->
+        s = (usec / 1_000_000) |> round()
+        m = div(s, 60)
+
+        case rem(s, 60) do
+          0 -> "#{m}m"
+          s -> "#{m}m#{s}s"
+        end
+    end
+  end
+
 end

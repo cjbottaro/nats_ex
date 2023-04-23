@@ -25,7 +25,26 @@ defmodule Jetstream do
   """
   @type revision :: seq
 
-  @type stream_create_opt ::
+  @type stream_purge_opt ::
+    {:filter, binary}
+    | {:seq, non_neg_integer}
+    | {:keep, non_neg_integer}
+
+  @defaults [
+    subjects: [],
+    max_age: 0,
+    max_bytes: -1,
+    max_msg_size: -1,
+    max_msgs: -1,
+    max_consumers: -1,
+    retention: :limits,
+    discard: :old,
+    storage: :file,
+    num_replicas: 1,
+    duplicate_window: nil,
+  ]
+
+  @type stream_create_opts :: [
     {:allow_direct, boolean}
     | {:allow_rollup_hdrs, boolean}
     | {:deny_delete, boolean}
@@ -43,20 +62,7 @@ defmodule Jetstream do
     | {:retention, :limits | :interest | :workqueue}
     | {:sealed, boolean}
     | {:storage, :file | :memory}
-    | {:subject, [binary]}
-
-  @defaults [
-    subjects: [],
-    max_age: 0,
-    max_bytes: -1,
-    max_msg_size: -1,
-    max_msgs: -1,
-    max_consumers: -1,
-    retention: :limits,
-    discard: :old,
-    storage: :file,
-    num_replicas: 1,
-    duplicate_window: nil,
+    | {:subjects, [binary]}
   ]
 
   @doc """
@@ -72,7 +78,7 @@ defmodule Jetstream do
   {:ok, _msg} = stream_create(conn, "foo", subjects: ["foo.*"])
   ```
   """
-  @spec stream_create(Nats.Client.t, binary, [stream_create_opt]) :: {:ok, map} | {:error, term}
+  @spec stream_create(Nats.Client.t, binary, stream_create_opts) :: {:ok, map} | {:error, term}
 
   def stream_create(pid, name, opts \\ []) do
     opts = Keyword.merge(@defaults, opts)
@@ -97,8 +103,23 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  def stream_info(pid, name) do
-    Nats.Client.request(pid, "$JS.API.STREAM.INFO.#{name}")
+  @type stream_info_opts ::[
+    {:subjects_filter, binary},
+    {:deleted_details, boolean},
+    {:offset, non_neg_integer}
+  ]
+
+  @spec stream_info(Nats.Client.t, binary, stream_info_opts) :: {:ok, Nats.Protocol.Msg.t} | {:error, term}
+
+  def stream_info(pid, name, opts \\ []) do
+    Nats.Client.request(pid, "$JS.API.STREAM.INFO.#{name}", payload: Map.new(opts))
+    |> decode_response()
+  end
+
+  @spec stream_purge(Nats.Client.t, binary, [stream_purge_opt]) :: {:ok, Nats.Protocol.Msg.t} | {:error, term}
+
+  def stream_purge(pid, name, opts \\ []) do
+    Nats.Client.request(pid, "$JS.API.STREAM.PURGE.#{name}", payload: Map.new(opts))
     |> decode_response()
   end
 
@@ -107,13 +128,19 @@ defmodule Jetstream do
     |> decode_response()
   end
 
-  @spec stream_msg_get(Nats.Client.t, binary, integer) :: {:ok, Nats.Msg.t} | {:error, term}
+  @spec stream_msg_get(Nats.Client.t, binary, integer) :: {:ok, Nats.Protocol.Msg.t} | {:error, term}
 
   def stream_msg_get(pid, name, seq) when is_integer(seq) do
     stream_msg_get(pid, name, seq: seq)
   end
 
-  @spec stream_msg_get(Nats.Client.t, binary, Keyword.t) :: {:ok, Nats.Msg.t} | {:error, term}
+  @type stream_msg_get_opts :: [
+    {:seq, non_neg_integer}
+    | {:last_by_subj, binary}
+    | {:next_by_subj, binary}
+  ]
+
+  @spec stream_msg_get(Nats.Client.t, binary, stream_msg_get_opts) :: {:ok, Nats.Protocol.Msg.t} | {:error, term}
 
   def stream_msg_get(pid, name, opts) do
     Nats.Client.request(pid, "$JS.API.STREAM.MSG.GET.#{name}", payload: Map.new(opts))

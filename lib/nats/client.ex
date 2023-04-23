@@ -180,6 +180,13 @@ defmodule Nats.Client do
     )
   end
 
+  def child_spec(config) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [config]}
+    }
+  end
+
   @doc """
   Start a client connection.
 
