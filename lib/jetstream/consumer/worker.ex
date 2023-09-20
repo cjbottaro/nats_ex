@@ -126,7 +126,7 @@ defmodule Jetstream.Consumer.Worker do
     # task has ended and will be (was) handled by :DOWN in handle_info.
     if task && Task.shutdown(task, :brutal_kill) == nil do
       elapsed = (System.monotonic_time(:microsecond) - task.start_time) / 1000 |> round()
-      Logger.warn("Timeout while processing #{task.message.reply_to} #{elapsed}ms")
+      Logger.warning("Timeout while processing #{task.message.reply_to} #{elapsed}ms")
       :ok = ask(state, 1) # Don't forget this.
     end
 

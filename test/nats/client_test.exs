@@ -62,4 +62,65 @@ defmodule Nats.ClientTest do
     refute_receive _, 100
   end
 
+  test "request", %{client: client} do
+    pid = self()
+
+    server = Task.async(fn ->
+      {:ok, _sid} = Nats.Client.sub(client, "foo")
+      send(pid, :ready)
+      receive do
+        %Msg{reply_to: reply_to} -> Nats.Client.pub(client, reply_to, payload: "ok")
+      end
+      receive do
+        %Msg{reply_to: reply_to} -> Nats.Client.pub(client, reply_to, payload: "ok")
+      end
+    end)
+
+    receive do
+      :ready -> nil
+    end
+
+    t1 = Task.async(fn -> Nats.Client.request(client, "foo", v: 1) end)
+    t2 = Task.async(fn -> Nats.Client.request(client, "foo", v: 2) end)
+
+    assert {:ok, %Msg{payload: "ok"}} = Task.await(t1)
+    assert {:ok, %Msg{payload: "ok"}} = Task.await(t2)
+
+    Task.await(server)
+  end
+
+  test "request timeout", %{client: client} do
+    pid = self()
+
+    server = Task.async(fn ->
+      {:ok, _sid} = Nats.Client.sub(client, "foo")
+      send(pid, :ready)
+      receive do
+        %Msg{} -> nil
+      end
+      receive do
+        %Msg{} -> nil
+      end
+    end)
+
+    receive do
+      :ready -> nil
+    end
+
+    t1 = Task.async fn ->
+      assert Nats.Client.request(client, "foo", timeout: 50, v: 1) == {:error, :timeout}
+    end
+
+    t2 = Task.async fn ->
+      assert Nats.Client.request(client, "foo", timeout: 50, v: 2) == {:error, :timeout}
+    end
+
+    Task.await_many([t1, t2, server])
+  end
+
+  test "request no responders", %{client: client} do
+    assert Nats.Client.request(client, "foo") == {:error, :no_responders}
+    assert Nats.Client.request(client, "foo", v: 1) == {:error, :no_responders}
+  end
+
 end
