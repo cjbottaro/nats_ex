@@ -83,7 +83,7 @@ defmodule Nats.Client do
   {:ok, %{payload: "hello"}} = request(conn, "echo-server", payload: "hello")
   ```
   """
-  @spec request(t, binary, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, :timeout} | {:error, binary}
+  @spec request(t, binary, Keyword.t) :: {:ok, Nats.Protocol.Msg.t} | {:error, :no_responders} | {:error, :timeout} | {:error, binary}
   def request(conn, subject, opts \\ []) do
     {timeout, opts} = Keyword.pop(opts, :timeout, 5000)
     {version, opts} = Keyword.pop(opts, :v, 2)
@@ -454,7 +454,7 @@ defmodule Nats.Client do
     if sub do
       Process.demonitor(sub.monitor, [:flush])
     else
-      Logger.warn("sid (#{sid}) not found")
+      Logger.warning("sid (#{sid}) not found")
     end
 
     resp = Protocol.unsub(sid, count)
@@ -561,7 +561,7 @@ defmodule Nats.Client do
         case state.subs[msg.sid] do
           %{receiver: {pid, _ref}} -> send(pid, msg)
           %{receiver: pid} when is_pid(pid) -> send(pid, msg)
-          nil -> Logger.warn("Unexpected #{inspect msg}")
+          nil -> Logger.warning("Unexpected #{inspect msg}")
         end
         {:ok, state}
 
@@ -587,14 +587,18 @@ defmodule Nats.Client do
     case Map.pop(requests, msg.sid) do
 
       {nil, _requests} ->
-        Logger.warn("Discarding request response due to timeout: #{inspect msg}")
+        Logger.warning("Discarding request response due to timeout: #{inspect msg}")
         {:ok, state}
 
       {request, requests} ->
         {from, timer} = request
         case Process.cancel_timer(timer) do
-          false -> Logger.warn("Discarding request response due to timeout: #{inspect msg}")
-          _time_left -> :ok = Connection.reply(from, {:ok, msg})
+          false -> Logger.warning("Discarding request response due to timeout: #{inspect msg}")
+          _time_left -> if "NATS/1.0 503" in msg.headers do
+            :ok = Connection.reply(from, {:error, :no_responders})
+          else
+            :ok = Connection.reply(from, {:ok, msg})
+          end
         end
         {:ok, %{state | requests_v1: requests}}
 
@@ -607,14 +611,18 @@ defmodule Nats.Client do
     case Map.pop(requests, msg.subject) do
 
       {nil, _requests} ->
-        Logger.warn("Discarding request response due to timeout: #{inspect msg}")
+        Logger.warning("Discarding request response due to timeout: #{inspect msg}")
         {:ok, state}
 
       {request, requests} ->
         {from, timer} = request
         case Process.cancel_timer(timer) do
-          false -> Logger.warn("Discarding request response due to timeout: #{inspect msg}")
-          _time_left -> :ok = Connection.reply(from, {:ok, msg})
+          false -> Logger.warning("Discarding request response due to timeout: #{inspect msg}")
+          _time_left -> if "NATS/1.0 503" in msg.headers do
+            :ok = Connection.reply(from, {:error, :no_responders})
+          else
+            :ok = Connection.reply(from, {:ok, msg})
+          end
         end
         {:ok, %{state | requests_v2: requests}}
 
@@ -649,7 +657,12 @@ defmodule Nats.Client do
     with {:ok, socket} <- :gen_tcp.connect(host, port, opts),
       {:ok, line} <- :gen_tcp.recv(socket, 0),
       Logger.debug("<<- #{inspect line}"),
-      connect = Protocol.Connect.new(lang: "elixir", verbose: false, headers: state.opts[:headers]),
+      connect = Protocol.Connect.new(
+        lang: "elixir",
+        verbose: false,
+        no_responders: true,
+        headers: state.opts[:headers]
+      ),
       :ok <- send_message(connect, socket),
       :ok <- resubscribe(socket, state.subs),
       :ok <- :inet.setopts(socket, active: :once)
