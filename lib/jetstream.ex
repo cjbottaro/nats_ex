@@ -3,7 +3,15 @@ defmodule Jetstream do
   Helper functions for the Jetstream API.
   """
 
+  @type name :: binary
+  @type stream_name :: name
+  @type consumer_name :: name
+
   @type reason :: binary | atom
+
+  @type msg :: Nats.Protocol.Msg.t
+  @type opts :: Keyword.t
+  @type config :: Keyword.t | map
 
   @typedoc """
   A key-value related error.
@@ -174,6 +182,14 @@ defmodule Jetstream do
     |> decode_response()
   end
 
+  def consumer_update(pid, stream_name, name, config) do
+    with {:ok, %{payload: %{"config" => old_config}}} <- consumer_info(pid, stream_name, name) do
+      old_config = Keyword.new(old_config, fn {k, v} -> {String.to_atom(k), v} end)
+      config = Keyword.merge(old_config, config)
+      consumer_create(pid, stream_name, name, config)
+    end
+  end
+
   def consumer_delete(pid, stream_name, name) do
     Nats.Client.request(pid, "$JS.API.CONSUMER.DELETE.#{stream_name}.#{name}")
     |> decode_response()
@@ -289,7 +305,55 @@ defmodule Jetstream do
   defp decode_response(resp) do
     with {:ok, msg} <- resp do
       payload = Jason.decode!(msg.payload)
-      {:ok, %{msg | payload: payload}}
+      if payload["error"] do
+        {:error, %{msg | payload: payload}}
+      else
+        {:ok, %{msg | payload: payload}}
+      end
+    end
+  end
+
+  @callback stream_create(name, config) :: {:ok, msg} | {:error, reason}
+  @callback stream_update(name, config) :: {:ok, msg} | {:error, reason}
+  @callback stream_delete(name) :: {:ok, msg} | {:error, reason}
+  @callback stream_info(name) :: {:ok, msg} | {:error, reason}
+  @callback stream_list() :: {:ok, msg} | {:error, reason}
+  @callback stream_msg_get(name, seq) :: {:ok, msg} | {:error, reason}
+  @callback stream_msg_delete(name, seq, opts) :: {:ok, msg} | {:error, reason}
+
+  @callback consumer_create(stream_name, name, config) :: {:ok, msg} | {:error, reason}
+  @callback consumer_update(stream_name, name, config) :: {:ok, msg} | {:error, reason}
+  @callback consumer_delete(stream_name, name) :: {:ok, msg} | {:error, reason}
+  @callback consumer_info(stream_name, name) :: {:ok, msg} | {:error, reason}
+  @callback consumer_list(stream_name) :: {:ok, msg} | {:error, reason}
+  @callback consumer_msg_next(stream_name, name, opts) :: {:ok, msg} | {:error, reason}
+  @callback consumer_msg_ack(msg | binary, :ack | :nak | :term, opts) :: {:ok, msg} | {:error, reason}
+
+  defmacro __using__(opts \\ []) do
+    nats = opts[:nats]
+    if !nats do
+      raise ArgumentError, ":nats option is required"
+    end
+
+    quote do
+      @behaviour Jetstream
+      @nats unquote(nats)
+
+      def stream_create(name, config \\ []), do: Jetstream.stream_create(@nats, name, config)
+      def stream_update(name, config), do: Jetstream.stream_update(@nats, name, config)
+      def stream_delete(name), do: Jetstream.stream_delete(@nats, name)
+      def stream_info(name), do: Jetstream.stream_info(@nats, name)
+      def stream_list(), do: Jetstream.stream_list(@nats)
+      def stream_msg_get(name, seq), do: Jetstream.stream_msg_get(@nats, name, seq)
+      def stream_msg_delete(name, seq, opts), do: Jetstream.stream_msg_delete(@nats, name, seq, opts)
+
+      def consumer_create(stream_name, name, config \\ []), do: Jetstream.consumer_create(@nats, stream_name, name, config)
+      def consumer_update(stream_name, name, config), do: Jetstream.consumer_update(@nats, stream_name, name, config)
+      def consumer_delete(stream_name, name), do: Jetstream.consumer_delete(@nats, stream_name, name)
+      def consumer_info(stream_name, name), do: Jetstream.consumer_info(@nats, stream_name, name)
+      def consumer_list(stream_name), do: Jetstream.consumer_list(@nats, stream_name)
+      def consumer_msg_next(stream_name, name, opts \\ []), do: Jetstream.consumer_msg_next(@nats, stream_name, name, opts)
+      def consumer_msg_ack(msg_or_js_ack, type, opts \\ []), do: Jetstream.consumer_msg_ack(@nats, msg_or_js_ack, type, opts)
     end
   end
 
